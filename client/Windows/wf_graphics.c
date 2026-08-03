@@ -20,6 +20,7 @@
 #include <freerdp/config.h>
 
 #include <winpr/crt.h>
+#include <winpr/library.h>
 
 #include <freerdp/codecs.h>
 #include <freerdp/log.h>
@@ -28,6 +29,38 @@
 #include "wf_graphics.h"
 
 #define TAG CLIENT_TAG("windows")
+
+/* FRDP-CURSOR-DPI-FIX — a server-sent cursor bitmap is built here at its raw protocol pixel size (see
+ * wf_Pointer_New below) with no DPI adjustment; CreateIconIndirect/SetCursor render it as a genuine hardware
+ * cursor, entirely separate from the desktop framebuffer's own GDI scaling (wf_scale_blt). On a display running
+ * above 100% Windows scaling the embedding host (Finestra) is running at, this makes the cursor look
+ * disproportionately tiny next to everything else on that same screen — confirmed structurally (this file) and
+ * against a live >100%-scaled display. GetDpiForWindow is Windows 10 1607+ only — Windows RT 8.1 (this client's
+ * flagship target) doesn't have it, so this falls back to the classic system-wide GetDeviceCaps query, which
+ * works on every Windows version back to XP, including RT.
+ */
+static UINT wf_get_dpi_for_scaling(wfContext* wfc)
+{
+	typedef UINT(WINAPI * GetDpiForWindow_t)(HWND hwnd);
+	HMODULE module = GetModuleHandle(_T("User32"));
+
+	if (module && wfc && wfc->hWndParent)
+	{
+		GetDpiForWindow_t pGetDpiForWindow = GetProcAddressAs(module, "GetDpiForWindow", GetDpiForWindow_t);
+		if (pGetDpiForWindow)
+		{
+			UINT dpi = pGetDpiForWindow(wfc->hWndParent);
+			if (dpi > 0)
+				return dpi;
+		}
+	}
+
+	HDC hdc = GetDC(nullptr);
+	UINT dpi = hdc ? (UINT)GetDeviceCaps(hdc, LOGPIXELSX) : 0;
+	if (hdc)
+		ReleaseDC(nullptr, hdc);
+	return dpi > 0 ? dpi : USER_DEFAULT_SCREEN_DPI;
+}
 
 HBITMAP wf_create_dib(wfContext* wfc, UINT32 width, UINT32 height, UINT32 srcFormat,
                       const BYTE* data, BYTE** pdata)
@@ -265,6 +298,33 @@ static BOOL wf_Pointer_New(rdpContext* context, rdpPointer* pointer)
 	}
 
 	hCur = CreateIconIndirect(&info);
+
+	/* FRDP-CURSOR-DPI-FIX — hCur above is built at pointer->width/height, the server's raw protocol pixel
+	 * size, with no DPI adjustment (see the file-level comment on wf_get_dpi_for_scaling). Re-scale it to the
+	 * embedding window's actual DPI so it matches everything else on a >100%-scaled display. CopyImage does the
+	 * stretch and returns a fresh, independently-sized HICON; a no-op (same handle back) at 96 DPI, so nothing
+	 * changes for the common case.
+	 */
+	if (hCur)
+	{
+		wfContext* wfc = (wfContext*)context;
+		UINT dpi = wf_get_dpi_for_scaling(wfc);
+		if (dpi != USER_DEFAULT_SCREEN_DPI)
+		{
+			int newW = MulDiv((int)pointer->width, (int)dpi, USER_DEFAULT_SCREEN_DPI);
+			int newH = MulDiv((int)pointer->height, (int)dpi, USER_DEFAULT_SCREEN_DPI);
+			if (newW > 0 && newH > 0)
+			{
+				HICON scaled = (HICON)CopyImage(hCur, IMAGE_ICON, newW, newH, 0);
+				if (scaled)
+				{
+					DestroyIcon(hCur);
+					hCur = scaled;
+				}
+			}
+		}
+	}
+
 	((wfPointer*)pointer)->cursor = hCur;
 	rc = TRUE;
 fail:
