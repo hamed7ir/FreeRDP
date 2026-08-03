@@ -30,6 +30,10 @@ LRESULT CALLBACK wf_event_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam
 
 void wf_event_focus_in(wfContext* wfc);
 
+/* FinestraRDP stats/pause spike (Form B): the stats pipe thread PostMessages this; wf_event_proc dispatches it
+ * on the MAIN thread → gdi_send_suppress_output. wParam = TRUE (pause/suppress) or FALSE (resume/allow+refresh). */
+#define WM_FINESTRA_SUPPRESS (WM_APP + 0x101)
+
 BOOL wf_keyboard_set_indicators(rdpContext* context, UINT16 led_flags);
 
 #define KBD_TAG CLIENT_TAG("windows")

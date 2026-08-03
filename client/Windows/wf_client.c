@@ -48,6 +48,7 @@
 #include <freerdp/freerdp.h>
 #include <freerdp/constants.h>
 #include <freerdp/settings.h>
+#include <freerdp/autodetect.h>   /* FinestraRDP stats spike: autodetect_get() for live RTT/bandwidth */
 
 #include <freerdp/locale/locale.h>
 #include <freerdp/locale/keyboard.h>
@@ -229,6 +230,53 @@ static BOOL wf_desktop_resize(rdpContext* context)
 	return TRUE;
 }
 
+/* ── FinestraRDP stats spike: client-side network-characteristics capture ────────────────────────────────
+ * The public rdpAutoDetect.netChar* fields are populated ONLY in the server role (autodetect_recv_rtt_
+ * measure_response / the netchar handlers store into them from the server's measurement). A CLIENT is
+ * handed the server-measured RTT + bandwidth EXCLUSIVELY through the NetworkCharacteristicsResult
+ * (connect-time, MS-RDPBCGR 2.2.14.1.5) and NetworkCharacteristicsSync (continuous, 2.2.14.2.3) callbacks,
+ * which are NULL unless the client sets them — so reading autodetect_get()->netCharAverageRTT directly
+ * always yields 0. We register the callbacks and stash the latest values here (one session per process →
+ * file-static is correct) for the stats pipe to stream. */
+static volatile LONG g_finestra_rtt = 0;     /* averageRTT, ms   */
+static volatile LONG g_finestra_base = 0;    /* baseRTT, ms      */
+static volatile LONG g_finestra_bw = 0;      /* bandwidth, kbps  */
+static volatile LONG g_finestra_resCnt = 0;  /* # NetworkCharacteristicsResult callbacks (connect-time) */
+static volatile LONG g_finestra_syncCnt = 0; /* # NetworkCharacteristicsSync callbacks (continuous)     */
+
+static BOOL wf_netchar_result(rdpAutoDetect* ad, RDP_TRANSPORT_TYPE transport, UINT16 seq,
+                              const rdpNetworkCharacteristicsResult* r)
+{
+	(void)ad;
+	(void)transport;
+	(void)seq;
+	InterlockedIncrement(&g_finestra_resCnt);
+	if (r)
+	{
+		if (r->averageRTT)
+			InterlockedExchange(&g_finestra_rtt, (LONG)r->averageRTT);
+		if (r->baseRTT)
+			InterlockedExchange(&g_finestra_base, (LONG)r->baseRTT);
+		if (r->bandwidth)
+			InterlockedExchange(&g_finestra_bw, (LONG)r->bandwidth);
+	}
+	return TRUE;
+}
+
+static BOOL wf_netchar_sync(rdpAutoDetect* ad, RDP_TRANSPORT_TYPE transport, UINT16 seq,
+                            UINT32 bandwidth, UINT32 rtt)
+{
+	(void)ad;
+	(void)transport;
+	(void)seq;
+	InterlockedIncrement(&g_finestra_syncCnt);
+	if (rtt)
+		InterlockedExchange(&g_finestra_rtt, (LONG)rtt);
+	if (bandwidth)
+		InterlockedExchange(&g_finestra_bw, (LONG)bandwidth);
+	return TRUE;
+}
+
 static BOOL wf_pre_connect(freerdp* instance)
 {
 	WINPR_ASSERT(instance);
@@ -318,6 +366,17 @@ static BOOL wf_pre_connect(freerdp* instance)
 	PubSub_SubscribeChannelConnected(instance->context->pubSub, wf_OnChannelConnectedEventHandler);
 	PubSub_SubscribeChannelDisconnected(instance->context->pubSub,
 	                                    wf_OnChannelDisconnectedEventHandler);
+
+	/* FinestraRDP stats spike: hook the client-side autodetect result/sync callbacks HERE — PreConnect runs
+	 * before the connect-time network-autodetect PDU exchange, so the connect-time Result is not missed. */
+	{
+		rdpAutoDetect* ad = autodetect_get(context);
+		if (ad)
+		{
+			ad->NetworkCharacteristicsResult = wf_netchar_result;
+			ad->NetworkCharacteristicsSync = wf_netchar_sync;
+		}
+	}
 	return TRUE;
 }
 
@@ -396,6 +455,63 @@ static WCHAR* wf_window_get_title(rdpSettings* settings)
 		             freerdp_settings_get_uint32(settings, FreeRDP_ServerPort));
 
 	return windowTitle;
+}
+
+/* ── FinestraRDP stats/pause spike (Form B) ──────────────────────────────────────────────────────────────
+ * A local named-pipe server thread that STREAMS live network stats (RTT + bandwidth, read from autodetect_get)
+ * to the C# host and ACCEPTS PAUSE/RESUME commands (dispatched to the main thread via WM_FINESTRA_SUPPRESS →
+ * gdi_send_suppress_output). Rendering stays NATIVE in wfreerdp's window — only ~tens of bytes/sec cross the
+ * pipe (zero framebuffer marshalling). Dormant unless a client connects (blocks on ConnectNamedPipe), so a
+ * normal launch is unaffected. Pipe name is per-PID so the host connects to the right session. SPIKE-only:
+ * fire-and-forget thread, no graceful shutdown (the process exit reaps it). */
+static DWORD WINAPI wf_stats_pipe_thread(LPVOID param)
+{
+	wfContext* wfc = (wfContext*)param;
+	WCHAR name[64] = { 0 };
+	(void)_snwprintf(name, 64, L"\\\\.\\pipe\\finestrardp.%lu", (unsigned long)GetCurrentProcessId());
+	HANDLE hPipe = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX,
+	                                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, NULL);
+	if (hPipe == INVALID_HANDLE_VALUE)
+		return 0;
+	if (!ConnectNamedPipe(hPipe, NULL) && GetLastError() != ERROR_PIPE_CONNECTED)
+	{
+		CloseHandle(hPipe);
+		return 0;
+	}
+	for (;;)
+	{
+		/* Values captured by the NetworkCharacteristicsResult/Sync callbacks (see wf_netchar_*). The
+		 * autodetect->netChar* struct fields are NOT used — they are never filled in the client role.
+		 * Line: STATS <avgRtt ms> <bw kbps> <baseRtt ms> <resultCbCount> <syncCbCount> — the C# host
+		 * parses the first two; the trailing fields are diagnostics (did the callbacks fire?). */
+		UINT32 rtt = (UINT32)g_finestra_rtt;
+		UINT32 bw = (UINT32)g_finestra_bw;
+		UINT32 base = (UINT32)g_finestra_base;
+		char buf[96] = { 0 };
+		int n = snprintf(buf, sizeof(buf), "STATS %lu %lu %lu %ld %ld\n", (unsigned long)rtt,
+		                 (unsigned long)bw, (unsigned long)base, (long)g_finestra_resCnt,
+		                 (long)g_finestra_syncCnt);
+		DWORD written = 0;
+		if (n <= 0 || !WriteFile(hPipe, buf, (DWORD)n, &written, NULL))
+			break;
+		DWORD avail = 0;
+		if (PeekNamedPipe(hPipe, NULL, 0, NULL, &avail, NULL) && avail > 0)
+		{
+			char cmd[64] = { 0 };
+			DWORD rd = 0;
+			if (ReadFile(hPipe, cmd, sizeof(cmd) - 1, &rd, NULL) && rd > 0)
+			{
+				cmd[rd] = 0;
+				if (strstr(cmd, "PAUSE"))
+					PostMessage(wfc->hwnd, WM_FINESTRA_SUPPRESS, (WPARAM)TRUE, 0);
+				else if (strstr(cmd, "RESUME"))
+					PostMessage(wfc->hwnd, WM_FINESTRA_SUPPRESS, (WPARAM)FALSE, 0);
+			}
+		}
+		Sleep(1000);
+	}
+	CloseHandle(hPipe);
+	return 0;
 }
 
 static BOOL wf_post_connect(freerdp* instance)
@@ -503,6 +619,13 @@ static BOOL wf_post_connect(freerdp* instance)
 	                                freerdp_settings_get_uint32(settings, FreeRDP_Floatbar));
 
 	wf_event_focus_in(wfc);
+
+	/* FinestraRDP stats/pause spike: start the local stats pipe (dormant until the C# host connects). */
+	{
+		HANDLE h = CreateThread(nullptr, 0, wf_stats_pipe_thread, wfc, 0, nullptr);
+		if (h)
+			CloseHandle(h);
+	}
 
 	return TRUE;
 }
