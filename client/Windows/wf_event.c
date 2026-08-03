@@ -395,6 +395,13 @@ LRESULT CALLBACK wf_event_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam
 
 		switch (Msg)
 		{
+			case WM_FINESTRA_SUPPRESS:
+				/* FinestraRDP stats/pause spike: dispatched from the pipe thread → suppress (pause) /
+				 * allow+full-refresh (resume) on the MAIN thread. */
+				if (wfc->common.context.gdi)
+					gdi_send_suppress_output(wfc->common.context.gdi, (BOOL)wParam);
+				break;
+
 			case WM_MOVE:
 				if (!wfc->disablewindowtracking)
 				{
