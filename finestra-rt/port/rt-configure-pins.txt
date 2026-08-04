@@ -1,0 +1,89 @@
+# ARM32 / Windows RT 8.1 -- configure, build and verify sequence for wfreerdp.
+#
+# Paths below are written as <PLACEHOLDERS>. Substitute your own; nothing here assumes
+# a particular machine layout. Run from PowerShell, in this order.
+#
+#   <REPO>      the root of this checkout
+#   <BUILD>     any empty build directory OUTSIDE the checkout
+#   <EXTLIBS>   directory holding the three prebuilt ARM32 libraries you supply
+#               (libcrypto.lib, libssl.lib, z.lib) -- see ../NOTICE.txt section 2
+
+# --- STEP 1: environment (MANDATORY, same shell as both cmake and ninja) ---
+#   . <REPO>\finestra-rt\port\armenv.ps1
+#
+# armenv.ps1 sets INCLUDE (MSVC 14.4x headers + Windows SDK 10.0.19041.0), LIB
+# (MSVC *14.16* lib\arm -- later toolsets dropped the ARM32 CRT -- plus SDK ucrt\arm
+# and um\arm) and prepends LLVM + Ninja to PATH. It warns for every path it cannot
+# find; fix those before continuing rather than reading the clang errors that follow.
+# Override any path with the matching environment variable BEFORE dot-sourcing.
+
+# --- STEP 2: configure ---
+
+cmake -S <REPO> `
+      -B <BUILD> `
+      -G Ninja `
+      -DCMAKE_TOOLCHAIN_FILE=<REPO>/finestra-rt/port/thumbv7-rt.cmake `
+      -DCMAKE_WINDOWS_VERSION=WIN81 `
+      -DCMAKE_BUILD_TYPE=Release `
+      -DBUILD_SHARED_LIBS=OFF `
+      -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+      -DOPENSSL_USE_STATIC_LIBS=ON `
+      -DOPENSSL_ROOT_DIR=<EXTLIBS> `
+      -DOPENSSL_INCLUDE_DIR=<REPO>/finestra-rt/deps-headers/openssl-3.3.2/include `
+      -DLIB_EAY_RELEASE=<EXTLIBS>/libcrypto.lib `
+      -DSSL_EAY_RELEASE=<EXTLIBS>/libssl.lib `
+      -DZLIB_INCLUDE_DIR=<REPO>/finestra-rt/deps-headers/zlib-1.3.1 `
+      -DZLIB_LIBRARY=<EXTLIBS>/z.lib `
+      -DZLIB_LIBRARY_RELEASE=<EXTLIBS>/z.lib `
+      -DWITH_WINMM=ON `
+      -DWITH_NATIVE_SSPI=OFF `
+      -DWITH_INTERNAL_RC4=ON `
+      -DWITH_INTERNAL_MD4=ON `
+      -DWITH_INTERNAL_MD5=OFF `
+      -DWITH_KRB5=OFF `
+      -DWITH_SERVER=OFF `
+      -DWITH_SAMPLE=OFF `
+      -DWITH_CLIENT_SDL=OFF `
+      -DWITH_FFMPEG=OFF `
+      -DWITH_SWSCALE=OFF `
+      -DWITH_CAIRO=OFF `
+      -DWITH_SIMD=OFF `
+      -DWITH_JPEG=OFF `
+      -DWITH_JSON_DISABLED=ON `
+      -DWITH_WINPR_TOOLS=OFF `
+      -DWITH_WINDOWS_CERT_STORE=OFF `
+      -DWITH_PROGRESS_BAR=OFF `
+      -DWITH_MANPAGES=OFF `
+      -DWITH_MEDIA_FOUNDATION=OFF `
+      -DWITH_OPENH264=OFF `
+      -DCHANNEL_URBDRC=OFF `
+      -DUSE_UNWIND=OFF `
+      -DBUILD_TESTING=OFF
+
+# WITH_NATIVE_SSPI=OFF is required: RT 8.1 has no usable native SSPI, so WinPR's
+# internal NTLM is used -- and NTLMv2 then needs RC4/MD4, which OpenSSL 3's default
+# provider no longer offers, hence WITH_INTERNAL_RC4/MD4=ON.
+# WITH_SIMD=OFF avoids NEON alignment faults on Tegra 3 class hardware.
+# CMAKE_WINDOWS_VERSION=WIN81 requires this fork's WIN81 commit; upstream has no such case.
+
+# --- STEP 3: build ---
+#   cmake --build <BUILD> --target wfreerdp
+#   (or: ninja -C <BUILD> wfreerdp -- same shell as STEP 1)
+
+# --- STEP 4: MANDATORY import gate before trusting the binary ---
+#   llvm-readobj --file-headers --coff-imports <BUILD>\client\Windows\cli\wfreerdp.exe
+#   PASS requires all three:  machine = IMAGE_FILE_MACHINE_ARMNT (0x1C4)
+#                             ZERO api-ms-win-* imports
+#                             NO secur32.dll import
+#   RT 8.1 lacks the API-set umbrella DLLs and native SSPI; a violation fails to LOAD,
+#   not to degrade -- the binary simply will not start on the target.
+
+# --- Not passed as -D pins; injected by finestra-rt/port/thumbv7-rt.cmake ---
+#   libproviders.lib   from finestra-rt/rt-deps/ (vendored; see ../NOTICE.txt section 3)
+#   clang-cl-arm-shim.h  force-included via /FI, resolved beside the toolchain file
+#   the MSVC default Windows import-lib set
+#     (gdi32 winspool shell32 ole32 oleaut32 uuid comdlg32 advapi32)
+#
+# No CRT shim archive is required. An earlier dependency survey rated one "likely
+# needed" from symbol content alone; a real RT link resolves with zero undefined
+# symbols without it.
