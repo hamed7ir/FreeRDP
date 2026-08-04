@@ -19,8 +19,10 @@ does not ship binaries for.
 
 `git merge-base HEAD 5370fb2` should return `5370fb2` exactly; if it does not, this README is stale.
 
-This branch is deliberately small: **its diff against `3.28.0` is exactly the four changes below and
-nothing else** — not even `.gitignore`.
+This branch is deliberately small. Its diff against `3.28.0` touches **exactly the four source changes
+below and nothing else** — not even `.gitignore`. Separately, it **adds** one new top-level directory,
+[`finestra-rt/`](finestra-rt/), containing the ARM32 cross-build material (toolchain, generated headers,
+one prebuilt archive, licences). No upstream file is modified to accommodate it.
 
 ## What this fork changes
 
@@ -49,33 +51,67 @@ branch and are in no shipped artifact.
 
 Build directories are siblings of the source tree, never inside it. Target: `wfreerdp`.
 
-### x64 / x86 — reproducible from public sources
+### x64 / x86 — reproducible from public sources; dependencies **not** vendored
 
 MSVC (`vcvars64.bat` / `vcvars32.bat`) + Ninja + **vcpkg static OpenSSL and zlib**
-(`x64-windows-static` / `x86-windows-static`). Shipping engines are configured with
-`WITH_NATIVE_SSPI=OFF`, `WITH_INTERNAL_RC4=ON`, `WITH_INTERNAL_MD4=ON` (so NLA rides WinPR's internal
-NTLM — hence change 1 above), `WITH_WINMM=ON`, static `/MT`, and the server/SDL/sample components off.
+(`x64-windows-static` / `x86-windows-static`). Nothing needs to be vendored here and nothing is: these
+are a standard vcpkg triplet that anyone can install.
 
-### ARM32 / Windows RT 8.1 — ⚠ NOT reproducible from this repository alone
+**Requirement:** static **OpenSSL 3.6.x** and **zlib 1.3.x**.
+**Our exact pins**, for anyone who wants byte-comparable output: **OpenSSL 3.6.3** and **zlib 1.3.2**.
+Note that `vcpkg install` gives you whatever the registry points at today, so matching those exact
+versions requires pinning the vcpkg baseline — a plain install will build fine but will not reproduce
+identical binaries.
 
-**Read this before assuming the RT engine builds.** The ARM32 path is a clang-cl cross-compile to
-`thumbv7-unknown-windows-msvc`, and its toolchain file, environment script and prebuilt ARM32
-dependencies are **not currently part of this repository**. They live in the maintainer's build tree.
-This README will not pretend otherwise.
+Shipping engines are configured with `WITH_NATIVE_SSPI=OFF`, `WITH_INTERNAL_RC4=ON`,
+`WITH_INTERNAL_MD4=ON` (so NLA rides WinPR's internal NTLM — hence change 1 above), `WITH_WINMM=ON`,
+static `/MT`, and the server/SDL/sample components off.
 
-To reproduce it today you would need, in addition to this source:
+On x86 specifically, MSVC overwrites the public `FindOpenSSL`/`FindZLIB` result variables, so the
+libraries must be pinned through the internal ones (`LIB_EAY_RELEASE`, `SSL_EAY_RELEASE`,
+`ZLIB_LIBRARY_RELEASE` and the `_DEBUG` pair). A configure line relying on the public variables fails.
 
-| Prerequisite | What it is | Licence | Notes |
+### ARM32 / Windows RT 8.1 — reproducible from documented sources
+
+The ARM32 path is a clang-cl cross-compile to `thumbv7-unknown-windows-msvc`. **The toolchain, the
+compatibility shim, the generated OpenSSL/zlib headers and one prebuilt archive are now in this
+repository**, under [`finestra-rt/`](finestra-rt/). Start from
+[`finestra-rt/port/rt-configure-pins.txt`](finestra-rt/port/rt-configure-pins.txt), which is the exact
+configure → build → verify sequence.
+
+**What is here:**
+
+| Component | What it is |
+|---|---|
+| `finestra-rt/port/thumbv7-rt.cmake` | CMake toolchain: `--target=thumbv7-unknown-windows-msvc`, `/GS-`, `-D_ARM_`, lld-link, the ARM32 `INCLUDE`/`LIB`, and the provider archive on the link line |
+| `finestra-rt/port/armenv.ps1` | companion environment script — **must be dot-sourced** in the same shell as both `cmake` and `ninja` |
+| `finestra-rt/port/clang-cl-arm-shim.h` | 936-byte force-include. MSVC's STL `<bit>` uses the ARM `_CountLeadingZeros` intrinsics in its `_M_ARM` branch without guarding for clang, which does not declare them; this supplies them over `__builtin_clz`. Apache-2.0. |
+| `finestra-rt/deps-headers/openssl-3.3.2/`, `zlib-1.3.1/` | the **generated** headers from the OpenSSL configure run. Stock upstream headers are **not** a safe substitute — they must match the configuration the libraries were built with. |
+| `finestra-rt/rt-deps/libproviders.lib` | prebuilt **OpenSSL 3.3.2** provider archive for ARM32. Vendored because it is the one component that cannot currently be regenerated from source — see [`finestra-rt/NOTICE.txt`](finestra-rt/NOTICE.txt) §3. |
+
+**What you must supply — three prebuilt ARM32 static libraries, not redistributed here:**
+
+| Library | Version | How it was produced |
+|---|---|---|
+| `libcrypto.lib` | OpenSSL 3.3.2, ARMNT, static `/MT` | `perl Configure VC-WIN32-ARM no-asm`, compiled with clang-cl thumbv7 |
+| `libssl.lib` | OpenSSL 3.3.2, ARMNT, static `/MT` | same run |
+| `z.lib` | zlib 1.3.1, ARMNT, static `/MT` | same toolchain and flags |
+
+⚠ That `Configure` invocation is **recorded from the original build and has not been re-verified** —
+nobody has yet re-run it from scratch and confirmed it reproduces linkable libraries. Treat it as the
+best available record, not a tested procedure. `no-asm` is not optional, and the vendored headers are
+configured to match it. Full detail in [`finestra-rt/NOTICE.txt`](finestra-rt/NOTICE.txt) §2.
+
+**Non-redistributable prerequisites** (install these yourself; the toolchain resolves them at their
+standard locations and every path is overridable by an environment variable of the same name):
+
+| Prerequisite | Version | Variable | Default |
 |---|---|---|---|
-| CMake toolchain file + env script | Sets `--target=thumbv7-unknown-windows-msvc`, `/GS-`, `-D_ARM_`, lld-link, and the `INCLUDE`/`LIB` for an ARM32 build | project's own | not in this repo |
-| `clang-cl-arm-shim.h` | 936-byte force-include. MSVC's STL `<bit>` uses the ARM `_CountLeadingZeros` intrinsics in its `_M_ARM` branch without guarding for clang, which does not declare them; this supplies them over `__builtin_clz`. | project's own | not in this repo |
-| `libcrypto.lib`, `libssl.lib`, `libproviders.lib` | **OpenSSL 3.3.2** built for ARM32 (`Configure VC-WIN32-ARM no-asm`, compiled with clang-cl thumbv7 `/MT`). `libproviders.lib` is OpenSSL's `providers/` subtree archived separately; lld needs it on the link line to resolve the default provider's algorithm implementations. | Apache-2.0 | not in this repo |
-| `z.lib` | **zlib 1.3.1** built with the same clang-cl flags | zlib licence | easiest to rebuild yourself |
-| OpenSSL/zlib headers | The **generated** headers from that same `Configure` run (`configuration.h`, `opensslconf.h`, `opensslv.h`). Substituting stock upstream headers is **not** safe — they must match the configuration the libraries were built with. | — | not in this repo |
-
-Toolchain versions this engine was actually built and verified with: **LLVM 18.1.8**, MSVC STL
-**14.44.35207**, the **v141 / 14.16.27023** ARM32 CRT (later MSVC toolsets dropped the ARM32 CRT), and
-Windows SDK **10.0.19041.0**.
+| LLVM (clang-cl, lld-link, llvm-lib, llvm-rc, llvm-readobj) | **18.1.8** | `LLVM_ROOT` | `C:\Program Files\LLVM` |
+| MSVC toolset headers | **14.44.35207** | `MSVC_STL_INCLUDE_DIR` | `…\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include` |
+| MSVC **v141 / 14.16.27023** ARM32 CRT | **14.16.27023** — later toolsets dropped the ARM32 CRT, so this specific one is required | `MSVC_ARM32_LIB_DIR` | `…\Microsoft Visual Studio\2017\BuildTools\VC\Tools\MSVC\14.16.27023\lib\arm` |
+| Windows SDK | **10.0.19041.0** | `WINSDK_ROOT`, `WINSDK_VER` | `C:\Program Files (x86)\Windows Kits\10` |
+| Ninja | any recent | `NINJA_DIR` | the copy shipped with VS Build Tools |
 
 **Import gate — mandatory for any ARM32 binary.** Run
 `llvm-readobj --file-headers --coff-imports wfreerdp.exe` and require all three: machine type
@@ -100,6 +136,12 @@ winpr/libwinpr/sspi/sspi_winpr.c
 winpr/libwinpr/sspi/NTLM/ntlm.c
 winpr/libwinpr/sspi/Negotiate/negotiate.c
 ```
+
+No other upstream file is modified. The `finestra-rt/` directory is **added**, not modified: it
+contains this project's own build material plus redistributed third-party components, each with its
+own licence and modification notice — see [`finestra-rt/NOTICE.txt`](finestra-rt/NOTICE.txt),
+[`LICENSE.OpenSSL-3.3.2.txt`](finestra-rt/LICENSE.OpenSSL-3.3.2.txt) and
+[`LICENSE.zlib-1.3.1.txt`](finestra-rt/LICENSE.zlib-1.3.1.txt).
 
 Upstream's original README is preserved verbatim as [`README-UPSTREAM.md`](README-UPSTREAM.md).
 
