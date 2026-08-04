@@ -107,11 +107,17 @@ standard locations and every path is overridable by an environment variable of t
 
 | Prerequisite | Version | Variable | Default |
 |---|---|---|---|
+| CMake | **3.20+** (verified with 4.4) | — | on `PATH` |
 | LLVM (clang-cl, lld-link, llvm-lib, llvm-rc, llvm-readobj) | **18.1.8** | `LLVM_ROOT` | `C:\Program Files\LLVM` |
 | MSVC toolset headers | **14.44.35207** | `MSVC_STL_INCLUDE_DIR` | `…\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include` |
 | MSVC **v141 / 14.16.27023** ARM32 CRT | **14.16.27023** — later toolsets dropped the ARM32 CRT, so this specific one is required | `MSVC_ARM32_LIB_DIR` | `…\Microsoft Visual Studio\2017\BuildTools\VC\Tools\MSVC\14.16.27023\lib\arm` |
 | Windows SDK | **10.0.19041.0** | `WINSDK_ROOT`, `WINSDK_VER` | `C:\Program Files (x86)\Windows Kits\10` |
 | Ninja | any recent | `NINJA_DIR` | the copy shipped with VS Build Tools |
+
+The MSVC and Windows SDK components reach the compiler through `%INCLUDE%` / `%LIB%`, which
+`armenv.ps1` sets — they are not named in the generated build files, so a missing one surfaces as a
+compiler error rather than a CMake error. That is why `armenv.ps1` existence-checks every one of them
+and warns per path before you start.
 
 **Import gate — mandatory for any ARM32 binary.** Run
 `llvm-readobj --file-headers --coff-imports wfreerdp.exe` and require all three: machine type
