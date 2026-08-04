@@ -26,6 +26,10 @@ endif()
 if(NOT LLVM_ROOT)
   set(LLVM_ROOT "C:/Program Files/LLVM")   # stock LLVM installer location
 endif()
+# Anything arriving from the environment or -D on Windows may use backslashes, which CMake
+# then re-emits into generated .cmake files where "\P" is an invalid escape and configure
+# dies with a confusing parse error. Normalise every host path to forward slashes.
+file(TO_CMAKE_PATH "${LLVM_ROOT}" LLVM_ROOT)
 set(_LLVM "${LLVM_ROOT}/bin")
 set(CMAKE_C_COMPILER      "${_LLVM}/clang-cl.exe")
 set(CMAKE_CXX_COMPILER    "${_LLVM}/clang-cl.exe")   # in case a subdir enables CXX
@@ -63,6 +67,7 @@ endif()
 if(NOT RT_DEPS_DIR)
   set(RT_DEPS_DIR "${_PORT_DIR}/../rt-deps")
 endif()
+file(TO_CMAKE_PATH "${RT_DEPS_DIR}" RT_DEPS_DIR)
 get_filename_component(RT_DEPS_DIR "${RT_DEPS_DIR}" ABSOLUTE)
 set(_PROVIDERS "${RT_DEPS_DIR}/libproviders.lib")
 if(NOT EXISTS "${_PROVIDERS}")
@@ -119,6 +124,8 @@ endif()
 if(NOT WINSDK_VER)
   set(WINSDK_VER "10.0.19041.0")
 endif()
+file(TO_CMAKE_PATH "${MSVC_STL_INCLUDE_DIR}" MSVC_STL_INCLUDE_DIR)
+file(TO_CMAKE_PATH "${WINSDK_ROOT}" WINSDK_ROOT)
 set(ENV{INCLUDE} "${MSVC_STL_INCLUDE_DIR};${WINSDK_ROOT}/Include/${WINSDK_VER}/ucrt;${WINSDK_ROOT}/Include/${WINSDK_VER}/shared;${WINSDK_ROOT}/Include/${WINSDK_VER}/um")
 if(NOT MSVC_ARM32_LIB_DIR)
   set(MSVC_ARM32_LIB_DIR "$ENV{MSVC_ARM32_LIB_DIR}")
@@ -126,6 +133,7 @@ endif()
 if(NOT MSVC_ARM32_LIB_DIR)   # v141/14.16 - later toolsets dropped the ARM32 CRT
   set(MSVC_ARM32_LIB_DIR "C:/Program Files (x86)/Microsoft Visual Studio/2017/BuildTools/VC/Tools/MSVC/14.16.27023/lib/arm")
 endif()
+file(TO_CMAKE_PATH "${MSVC_ARM32_LIB_DIR}" MSVC_ARM32_LIB_DIR)
 set(ENV{LIB}     "${MSVC_ARM32_LIB_DIR};${WINSDK_ROOT}/Lib/${WINSDK_VER}/ucrt/arm;${WINSDK_ROOT}/Lib/${WINSDK_VER}/um/arm")
 
 # ---- find behaviour: honour host paths for libs/headers --------------------
