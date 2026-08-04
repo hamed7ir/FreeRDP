@@ -94,6 +94,45 @@ set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fuse-ld=lld")
 # survey rated one "likely required" on symbol content alone; a real RT link resolves
 # with zero undefined symbols without it. Do not add one on the strength of that note.
 
+# ---- fail-fast on every pinned input ---------------------------------------
+# CMake does NOT validate -DLIB_EAY_RELEASE / -DSSL_EAY_RELEASE / -DZLIB_LIBRARY* at configure
+# time: a wrong or empty value configures cleanly and only surfaces as a ninja "missing and no
+# known rule to make it" at LINK time, minutes later, naming the mangled path rather than the
+# variable that produced it. (Observed for real: a shell variable collision turned a pin into
+# "System.Collections.Specialized.OrderedDictionary/z.lib" and configure said nothing.)
+# Check them here instead, where the message can name the variable.
+# MUST be skipped inside try_compile: CMake re-reads this toolchain file for every compiler
+# probe, and those sub-projects do NOT inherit -D cache entries, so the check would fire on
+# every probe and kill an otherwise valid configure. IN_TRY_COMPILE is the documented way to
+# tell the two apart (CMAKE_IN_TRY_COMPILE is deprecated).
+get_property(_finestra_in_try_compile GLOBAL PROPERTY IN_TRY_COMPILE)
+if(NOT _finestra_in_try_compile AND NOT DEFINED ENV{FINESTRA_RT_SKIP_PIN_CHECK})
+  foreach(_pin LIB_EAY_RELEASE SSL_EAY_RELEASE ZLIB_LIBRARY_RELEASE)
+    if(NOT DEFINED ${_pin} OR "${${_pin}}" STREQUAL "")
+      message(FATAL_ERROR
+        "thumbv7-rt.cmake: -D${_pin} is not set.\n"
+        "  The ARM32 build needs three prebuilt static libraries that are NOT in this repository:\n"
+        "    -DLIB_EAY_RELEASE=<dir>/libcrypto.lib   (OpenSSL 3.3.2, ARMNT, static /MT)\n"
+        "    -DSSL_EAY_RELEASE=<dir>/libssl.lib      (OpenSSL 3.3.2, ARMNT, static /MT)\n"
+        "    -DZLIB_LIBRARY_RELEASE=<dir>/z.lib      (zlib 1.3.1,   ARMNT, static /MT)\n"
+        "  See finestra-rt/NOTICE.txt section 2 and finestra-rt/port/rt-configure-pins.txt.")
+    endif()
+    if(NOT EXISTS "${${_pin}}")
+      message(FATAL_ERROR
+        "thumbv7-rt.cmake: ${_pin} points at a file that does not exist:\n"
+        "    ${${_pin}}\n"
+        "  Fix the -D${_pin} value. See finestra-rt/NOTICE.txt section 2.")
+    endif()
+  endforeach()
+  # ZLIB_LIBRARY is what FindZLIB ultimately consumes; check it too when it was supplied.
+  if(DEFINED ZLIB_LIBRARY AND NOT "${ZLIB_LIBRARY}" STREQUAL "" AND NOT EXISTS "${ZLIB_LIBRARY}")
+    message(FATAL_ERROR
+      "thumbv7-rt.cmake: ZLIB_LIBRARY points at a file that does not exist:\n"
+      "    ${ZLIB_LIBRARY}\n"
+      "  Fix the -DZLIB_LIBRARY value. See finestra-rt/NOTICE.txt section 2.")
+  endif()
+endif()
+
 # ---- cross hygiene ---------------------------------------------------------
 # EXECUTABLE, not STATIC_LIBRARY: the CRT + SDK-arm link environment is complete, and
 # link-based checks MUST actually link to be correct. Under STATIC_LIBRARY,
