@@ -43,9 +43,28 @@ one prebuilt archive, licences). No upstream file is modified to accommodate it.
    it never becomes a load-time import (Windows RT 8.1's loader lacks that Windows-10-only export),
    falling back to `GetDeviceCaps(LOGPIXELSX)`.
 
-Camera redirection (a Media Foundation `rdpecam` backend with hardware H.264 encode) and a windowed
-Windows-key passthrough exist as **local x64 debug spikes**. They are deliberately **not** on this
-branch and are in no shipped artifact.
+That is the complete list. This branch carries **exactly these four modifications** over upstream
+`3.28.0` — no fifth change, and no other upstream file is touched:
+
+| # | commit | change | files |
+|---|---|---|---|
+| 1 | `8eca47218` | WinPR internal-SSPI: dispatch by package index instead of a mixed-width name | 4 |
+| 2 | `0ecc589d1` | Windows client: `/parent-window` embedding fixes and a local stats/control pipe | 3 |
+| 3 | `9a31cc2a5` | CMake: add the missing `WIN81` case to `CMAKE_WINDOWS_VERSION` | 1 |
+| 4 | `8f0675c2e` | Windows client: scale the session pointer to the window's DPI | 1 |
+
+Check it rather than take it on trust:
+
+```
+git diff --name-status 3.28.0 finestra-arm32-rt-3.28 -- . ':(exclude)finestra-rt' ':(exclude)README*.md'
+```
+
+That lists **exactly 9 modified files and nothing else** — the four changes above and no additions or
+deletions. Anything not in the table is not in this branch.
+
+`git log --oneline 3.28.0..finestra-arm32-rt-3.28` shows **11** commits: the four source changes above,
+plus this README and the six that add the `finestra-rt/` cross-build toolchain. Those seven touch no
+upstream file, which is what the `--name-status` command above demonstrates.
 
 ## Building
 
