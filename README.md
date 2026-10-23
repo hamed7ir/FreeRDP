@@ -35,9 +35,11 @@ no prebuilt binary is in the tree.
    per-process local named pipe reports live RTT, bandwidth and the input mode, and accepts PAUSE/RESUME
    (suppress-output) and TOUCH ON/OFF. In **mouse mode** Windows' own touch-to-mouse promotion drives the
    pointer (a tap clicks, press-and-hold is the right button); in **touch mode** touch goes to the server
-   as multi-touch input (MS-RDPEI, `/multitouch`). Without `/parent-window` the client behaves exactly as
-   upstream's. New files `sdl_finestra.cpp` and `sdl_finestra.hpp`; small hooks in `sdl_context`,
-   `sdl_window`, `sdl_disp` and `sdl_freerdp`.
+   as multi-touch input (MS-RDPEI, `/multitouch`). Without `/parent-window` the client behaves as
+   upstream's, with one exception in the ARM32 build: it defaults to SDL's Direct3D 9 renderer, because
+   Direct3D 11 at feature level 9_1 draws a black screen on Windows RT (an `SDL_RENDER_DRIVER` setting
+   still takes precedence). New files `sdl_finestra.cpp` and `sdl_finestra.hpp`; small hooks in
+   `sdl_context`, `sdl_window`, `sdl_disp` and `sdl_freerdp`.
 
 **In code shared by every client** (both are upstream bugs, offered upstream):
 
@@ -49,7 +51,9 @@ no prebuilt binary is in the tree.
 
 **In the Windows client** (`wfreerdp`, which Finestra 1.x shipped):
 
-4. **`client/windows`: `/parent-window` embedding fixes + the same local stats/control pipe** (PAUSE/RESUME).
+4. **`client/windows`: a local stats/control pipe** like the one above (live RTT and bandwidth from
+   FreeRDP's network autodetect, and PAUSE/RESUME). The commit's message also mentions `/parent-window`
+   embedding fixes; as applied to 3.32.2 the change contains only the pipe.
 5. **`client/windows`: scale the session pointer to the window's DPI.** `GetDpiForWindow` is resolved
    dynamically via `GetProcAddress` so it never becomes a load-time import (Windows RT 8.1's loader lacks
    that Windows-10-only export), falling back to `GetDeviceCaps(LOGPIXELSX)`.
@@ -64,10 +68,10 @@ and `finestra-rt/` commits:
 
 | # | commit | change | files |
 |---|---|---|---|
-| 1 | `client/SDL: run inside Finestra (embedding, touch and mouse modes, stats pipe)` | SDL3 client | 7 |
-| 2 | `client/common: fill in the active contact count in freerdp_client_touch_update` | shared client code | 1 |
-| 3 | `locale: use UINT32 for the keyboard remapping key and value` | libfreerdp | 1 |
-| 4 | `bc8568940` | Windows client: `/parent-window` embedding fixes and a local stats/control pipe | 3 |
+| 1 | `37e03d1f0` | SDL3 client: run inside Finestra (embedding, touch and mouse modes, stats pipe) | 7 |
+| 2 | `57fd8b939` | shared client code: fill in the active contact count in `freerdp_client_touch_update` | 1 |
+| 3 | `7b2147e75` | libfreerdp: use `UINT32` for the keyboard remapping key and value | 1 |
+| 4 | `bc8568940` | Windows client: a local stats/control pipe | 3 |
 | 5 | `f345d2ac4` | Windows client: scale the session pointer to the window's DPI | 1 |
 | 6 | `30e98430d` | CMake: add the missing `WIN81` case to `CMAKE_WINDOWS_VERSION` | 1 |
 
