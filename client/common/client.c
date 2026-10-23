@@ -2344,6 +2344,18 @@ static BOOL freerdp_client_touch_update(rdpClientContext* cctx, UINT32 flags, IN
 			contact->x = x;
 			contact->y = y;
 
+			/* The number of contacts currently down, this one included (on UP it is reset below,
+			 * after the copy). The mouse emulation picks its button from it: left as 0, every
+			 * contact fell to the "unmapped" case of freerdp_handle_touch_to_mouse and no button
+			 * was ever sent. */
+			UINT32 active = 0;
+			for (size_t j = 0; j < ARRAYSIZE(cctx->contacts); j++)
+			{
+				if (cctx->contacts[j].id != 0)
+					active++;
+			}
+			contact->count = active;
+
 			*pcontact = *contact;
 
 			const BOOL resetcontact = (flags & FREERDP_TOUCH_UP) != 0;
