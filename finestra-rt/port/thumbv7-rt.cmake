@@ -1,6 +1,6 @@
 # ============================================================================
 # finestra-rt/port/thumbv7-rt.cmake
-# FreeRDP 3.28.0 -> thumbv7 (ARMNT) cross toolchain for Windows RT 8.1 / ARM32.
+# FreeRDP 3.32.2 -> thumbv7 (ARMNT) cross toolchain for Windows RT 8.1 / ARM32.
 #
 # COMPANION: armenv.ps1  --  MUST be dot-sourced in the shell before BOTH cmake
 #   and ninja. It sets %INCLUDE% / %LIB% / %PATH% that clang-cl and lld-link read
@@ -19,7 +19,7 @@ set(CMAKE_SYSTEM_NAME      Windows)   # desktop RT. NOT WindowsStore -> that fli
                                       # kills the Windows client and native SSPI.
 set(CMAKE_SYSTEM_PROCESSOR ARM)       # 32-bit ARM / ARMNT
 
-# ---- tools (LLVM 18.1.8 verified) ------------------------------------------
+# ---- tools (LLVM 18.1.8 verified for the C-only Windows client; the C++ SDL3 client needs rt2.1) ---
 if(NOT LLVM_ROOT)
   set(LLVM_ROOT "$ENV{LLVM_ROOT}")
 endif()
@@ -56,38 +56,35 @@ if(NOT EXISTS "${_SHIM}")
 endif()
 set(_CFLAGS "--target=thumbv7-unknown-windows-msvc /GS- /bigobj -D_ARM_ -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH /FI\"${_SHIM}\"")
 set(CMAKE_C_FLAGS_INIT   "${_CFLAGS}")
-set(CMAKE_CXX_FLAGS_INIT "${_CFLAGS}")
+# C++ (the SDL3 client; the Windows client is C only) needs two more:
+#   /EHsc  : C++ exceptions. Setting CMAKE_CXX_FLAGS_INIT replaces CMake's MSVC default, which is
+#            where /EHsc normally comes from, and the SDL client throws and catches.
+#   /UWINPR_DEFINE_ATTR_NODISCARD : FreeRDP opts in to its nodiscard attribute with a compile
+#            definition (top-level CMakeLists.txt). In C++17 that becomes [[nodiscard]] written AFTER
+#            FREERDP_API, which clang-cl expands to __declspec(...): standard C++ allows no
+#            attribute there and clang rejects it, MSVC lets it pass. Undefining the opt-in (the
+#            /U comes after CMake's -D on the command line) leaves the attribute empty. It only
+#            ever produced warnings, so the generated code is the same.
+set(CMAKE_CXX_FLAGS_INIT "${_CFLAGS} /EHsc /UWINPR_DEFINE_ATTR_NODISCARD")
 
-# ---- linker: lld-link, plus the OpenSSL-3 provider archive ------------------
-# RT_DEPS_DIR holds libproviders.lib. It is vendored at finestra-rt/rt-deps, so the
-# default needs no configuration; override with -DRT_DEPS_DIR or $env:FINESTRA_RT_DEPS.
-if(NOT RT_DEPS_DIR)
-  set(RT_DEPS_DIR "$ENV{FINESTRA_RT_DEPS}")
-endif()
-if(NOT RT_DEPS_DIR)
-  set(RT_DEPS_DIR "${_PORT_DIR}/../rt-deps")
-endif()
-file(TO_CMAKE_PATH "${RT_DEPS_DIR}" RT_DEPS_DIR)
-get_filename_component(RT_DEPS_DIR "${RT_DEPS_DIR}" ABSOLUTE)
-set(_PROVIDERS "${RT_DEPS_DIR}/libproviders.lib")
-if(NOT EXISTS "${_PROVIDERS}")
-  message(FATAL_ERROR "thumbv7-rt.cmake: missing ${_PROVIDERS}. See finestra-rt/NOTICE.txt.")
-endif()
-# WHAT THIS ARCHIVE IS FOR (corrected 2026-08-03): it does NOT define
-# ossl_default_provider_init -- that symbol is defined inside libcrypto.lib, verified
-# with llvm-nm (libcrypto defines it; libproviders does not). This OpenSSL 3.3.2 build
-# split the default provider's ALGORITHM IMPLEMENTATIONS into a separate archive, and
-# libproviders.lib is that archive: 4,671 defined symbols -- the cipher, digest, KDF,
-# MAC, RAND, keymgmt, signature and encoder/decoder implementations (ossl_gcm_cipher,
-# ossl_rand_drbg_new, ossl_rsa_check_key, ...) that libcrypto's provider entry point
-# then references. Without it the link fails on those implementation symbols, not on
-# the init function. Only the final wfreerdp.exe links, so exe-flags is the right
-# home; lld resolves the libcrypto<->libproviders cycle in one multi-pass.
+# ---- linker: lld-link -------------------------------------------------------
+# No separate OpenSSL provider archive. The OpenSSL 3.3.2 libraries this toolchain was first
+# used with had the default provider's algorithm implementations split into an extra
+# libproviders.lib that had to be linked here; the OpenSSL 3.5.9 libraries built by
+# build-openssl-arm32.ps1 carry them inside libcrypto.lib, as a standard static build does
+# (verified with llvm-nm: libcrypto.lib defines ossl_default_provider_init AND the
+# implementations such as ossl_aes256gcm_functions).
 # clang-cl cross only seeds CMAKE_C_STANDARD_LIBRARIES with kernel32+user32; a normal MSVC
 # build also links gdi32/shell32/ole32/... . wfreerdp uses GDI + CommandLineToArgvW, so
 # restore the full MSVC default Windows import-lib set here (resolved via %LIB% = SDK um\arm).
-set(_WINLIBS "gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib")
-set(CMAKE_EXE_LINKER_FLAGS_INIT    "-fuse-ld=lld ${_PROVIDERS} ${_WINLIBS}")
+# bcrypt.lib IS listed, although OpenSSL requests it itself with #pragma comment(lib): a #pragma
+# library is searched only AFTER the libraries on the link line, and FreeRDP links ncrypt.lib (smart
+# cards), whose import library also carries a BCryptGenRandom stub - on newer Windows ncrypt.dll merely
+# forwards it to bcrypt.dll. Unlisted, the engine imported BCryptGenRandom from ncrypt.dll (measured,
+# OpenSSL 3.5.9 build), a forwarder nothing proves Windows RT 8.1's ncrypt.dll has. Listed here, ahead
+# of the target's own libraries, it resolves from bcrypt.dll, which has exported it since Vista.
+set(_WINLIBS "bcrypt.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib")
+set(CMAKE_EXE_LINKER_FLAGS_INIT    "-fuse-ld=lld ${_WINLIBS}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fuse-ld=lld")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fuse-ld=lld")
 # NOTE: no CRT shim archive is linked here, and none is needed. An earlier dependency
@@ -112,9 +109,10 @@ if(NOT _finestra_in_try_compile AND NOT DEFINED ENV{FINESTRA_RT_SKIP_PIN_CHECK})
       message(FATAL_ERROR
         "thumbv7-rt.cmake: -D${_pin} is not set.\n"
         "  The ARM32 build needs three prebuilt static libraries that are NOT in this repository:\n"
-        "    -DLIB_EAY_RELEASE=<dir>/libcrypto.lib   (OpenSSL 3.3.2, ARMNT, static /MT)\n"
-        "    -DSSL_EAY_RELEASE=<dir>/libssl.lib      (OpenSSL 3.3.2, ARMNT, static /MT)\n"
-        "    -DZLIB_LIBRARY_RELEASE=<dir>/z.lib      (zlib 1.3.1,   ARMNT, static /MT)\n"
+        "    -DLIB_EAY_RELEASE=<dir>/libcrypto.lib   (OpenSSL 3.5.9, ARMNT, static /MT)\n"
+        "    -DSSL_EAY_RELEASE=<dir>/libssl.lib      (OpenSSL 3.5.9, ARMNT, static /MT)\n"
+        "    -DZLIB_LIBRARY_RELEASE=<dir>/z.lib      (zlib 1.3.2,   ARMNT, static /MT)\n"
+        "  Build them with finestra-rt/port/build-openssl-arm32.ps1 and build-zlib-arm32.ps1.\n"
         "  See finestra-rt/NOTICE.txt section 2 and finestra-rt/port/rt-configure-pins.txt.")
     endif()
     if(NOT EXISTS "${${_pin}}")
@@ -143,8 +141,9 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)         # no clang LTO bitcode vs no
 
 # ---- INCLUDE / LIB ---------------------------------------------------------
 # Backup for configure-time try_compiles; the build inherits these from armenv.ps1.
-# MSVC 14.4x headers (C-only path, no STL) + Windows SDK 10.0.19041.0 ucrt/shared/um.
-# MSVC 14.16 (v141) lib\arm has the ARM32 CRT -- later toolsets dropped it.
+# MSVC 14.4x headers (the SDL3 client uses the STL) + Windows SDK 10.0.19041.0 ucrt/shared/um.
+# lib\arm: 14.16 (v141) is the Windows client's verified default; the SDL3 client's C++ objects
+# must match the 14.44 STL headers, so it links 14.44's lib\arm, which carries the ARM32 CRT too.
 if(NOT MSVC_STL_INCLUDE_DIR)
   set(MSVC_STL_INCLUDE_DIR "$ENV{MSVC_STL_INCLUDE_DIR}")
 endif()
@@ -169,7 +168,7 @@ set(ENV{INCLUDE} "${MSVC_STL_INCLUDE_DIR};${WINSDK_ROOT}/Include/${WINSDK_VER}/u
 if(NOT MSVC_ARM32_LIB_DIR)
   set(MSVC_ARM32_LIB_DIR "$ENV{MSVC_ARM32_LIB_DIR}")
 endif()
-if(NOT MSVC_ARM32_LIB_DIR)   # v141/14.16 - later toolsets dropped the ARM32 CRT
+if(NOT MSVC_ARM32_LIB_DIR)   # v141/14.16 default (Windows client); the SDL3 client sets 14.44's lib\arm
   set(MSVC_ARM32_LIB_DIR "C:/Program Files (x86)/Microsoft Visual Studio/2017/BuildTools/VC/Tools/MSVC/14.16.27023/lib/arm")
 endif()
 file(TO_CMAKE_PATH "${MSVC_ARM32_LIB_DIR}" MSVC_ARM32_LIB_DIR)

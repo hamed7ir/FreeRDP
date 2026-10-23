@@ -7,10 +7,11 @@
 # Every path below is overridable by an environment variable of the same name set BEFORE
 # dot-sourcing. The defaults are the STANDARD install locations of the Microsoft and LLVM
 # prerequisites -- override them rather than editing this file. The VERSIONS are not
-# arbitrary; see finestra-rt/README.md:
-#   * MSVC 14.16 (v141) is required for lib\arm -- later toolsets dropped the ARM32 CRT.
+# arbitrary; see the repository README.md:
+#   * lib\arm: MSVC 14.16 (v141) is the Windows client's verified default; the C++ SDL3 client
+#     needs 14.44's lib\arm (its objects must match the 14.44 STL headers).
 #   * Windows SDK 10.0.19041.0 provides the arm ucrt/um import libraries.
-#   * LLVM 18.1.8 is the verified clang-cl / lld-link version.
+#   * LLVM 18.1.8 is verified for the Windows client; the SDL3 client needs rt2.1 (LLVM 23.1.1-rt2.1).
 
 function Def($n, $f) { $v = [Environment]::GetEnvironmentVariable($n); if ($v) { $v } else { $f } }
 

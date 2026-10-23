@@ -8,97 +8,91 @@ Upstream FreeRDP is licensed Apache-2.0; everything here is compatible with that
 --------------------------------------------------------------------------------
 1. WHAT IS HERE
 --------------------------------------------------------------------------------
-  port/thumbv7-rt.cmake        CMake toolchain file for thumbv7-unknown-windows-msvc
-  port/armenv.ps1              companion environment script (must be dot-sourced)
-  port/clang-cl-arm-shim.h     compatibility shim, (c) 2026 Hamed Ghorbani, Apache-2.0
-  port/rt-configure-pins.txt   the exact configure/build/verify command sequence
-  rt-deps/libproviders.lib     prebuilt OpenSSL 3.3.2 provider archive (ARM32) -- see 3
-  deps-headers/openssl-3.3.2/  GENERATED OpenSSL headers from that build -- see 4
-  deps-headers/zlib-1.3.1/     zlib headers matching the prebuilt z.lib
+  port/thumbv7-rt.cmake          CMake toolchain file for thumbv7-unknown-windows-msvc
+  port/armenv.ps1                companion environment script (must be dot-sourced)
+  port/clang-cl-arm-shim.h       compatibility shim, (c) 2026 Hamed Ghorbani, Apache-2.0
+  port/build-openssl-arm32.ps1   builds the ARM32 OpenSSL libraries from source -- see 2
+  port/build-zlib-arm32.ps1      builds the ARM32 zlib library from source -- see 2
+  port/rt-configure-pins.txt     the exact configure/build/verify command sequence
+  deps-headers/openssl-3.5.9/    GENERATED OpenSSL headers matching those libraries -- see 4
+  deps-headers/zlib-1.3.2/       zlib headers matching z.lib
+
+No prebuilt binary of any kind is in this directory.
 
 --------------------------------------------------------------------------------
-2. WHAT IS *NOT* HERE -- THREE PREBUILT LIBRARIES YOU MUST SUPPLY
+2. WHAT IS *NOT* HERE -- THREE LIBRARIES YOU BUILD
 --------------------------------------------------------------------------------
 The ARM32 build links three static libraries that are NOT included in this repository:
 
-    libcrypto.lib     OpenSSL 3.3.2, ARM32 (ARMNT), static /MT
-    libssl.lib        OpenSSL 3.3.2, ARM32 (ARMNT), static /MT
-    z.lib             zlib 1.3.1,    ARM32 (ARMNT), static /MT
+    libcrypto.lib     OpenSSL 3.5.9, ARM32 (ARMNT), static /MT
+    libssl.lib        OpenSSL 3.5.9, ARM32 (ARMNT), static /MT
+    z.lib             zlib 1.3.2,    ARM32 (ARMNT), static /MT
 
-Point the build at them with -DLIB_EAY_RELEASE, -DSSL_EAY_RELEASE and -DZLIB_LIBRARY
-(see port/rt-configure-pins.txt for the full command).
+Build them from the official source releases with the two scripts in port/:
 
-How they were produced, recorded from the original build:
+    port/build-openssl-arm32.ps1 -Source <openssl-3.5.9> -Build <dir> -Out <dir>
+    port/build-zlib-arm32.ps1    -Source <zlib-1.3.2>    -Build <dir> -Out <dir>
 
-    OpenSSL 3.3.2:   perl Configure VC-WIN32-ARM no-asm
-    zlib 1.3.1:      static /MT, same ARMNT toolchain
+and point the engine build at them with -DLIB_EAY_RELEASE, -DSSL_EAY_RELEASE and
+-DZLIB_LIBRARY (see port/rt-configure-pins.txt for the full command).
 
-  *** This invocation is RECORDED FROM THE ORIGINAL BUILD AND HAS NOT BEEN
-      RE-VERIFIED. *** Nobody has yet re-run it from scratch and confirmed it
-      reproduces linkable libraries. A planned rebuild will confirm it; until then,
-      treat it as the best available record rather than a tested procedure.
+The OpenSSL script runs OpenSSL's own VC-WIN32-ARM target with clang-cl and llvm-lib
+substituted for MSVC's ARM tools, with the engine toolchain's compile flags and these
+options: no-asm enable-static-engine enable-capieng no-tests no-docs no-shared
+no-module no-apps no-uplink, and _WIN32_WINNT=0x0603. Each script states its reasons
+in its header.
 
-`no-asm` is not optional: the ARM32 assembly paths are not usable in this
-configuration, and the generated headers in deps-headers/openssl-3.3.2 are configured
-to match (see 4).
+VERIFIED 2026-10-21: both scripts were run from scratch and produced the libraries the
+engine links. Built twice in different directories, the zlib script's output was
+byte-identical. The OpenSSL script compiles with /Brepro, but its output has NOT been
+checked for byte-identity, and OpenSSL's own /Zi debug information records the build
+paths, so expect differences between machines.
 
---------------------------------------------------------------------------------
-3. rt-deps/libproviders.lib -- NON-OFFICIAL PREBUILT, AND WHAT IT IS FOR
---------------------------------------------------------------------------------
-This is a NON-OFFICIAL, third-party-built static library. It is NOT distributed by the
-OpenSSL project and carries no upstream guarantee. It is OpenSSL 3.3.2 code, licensed
-Apache-2.0; the licence text is in LICENSE.OpenSSL-3.3.2.txt.
+`no-asm` is not optional: there is no ARM32 assembly path through clang-cl, and the
+generated headers in deps-headers/openssl-3.5.9 are configured to match (see 4).
 
-WHAT IT DOES: this OpenSSL 3.3.2 build split the default provider's ALGORITHM
-IMPLEMENTATIONS into a separate archive. libproviders.lib is that archive -- 4,671
-defined symbols covering the cipher, digest, KDF, MAC, RAND, keymgmt, signature and
-encoder/decoder implementations. It does NOT define ossl_default_provider_init; that
-symbol lives in libcrypto.lib (verified with llvm-nm: libcrypto defines it,
-libproviders does not). Without libproviders.lib the link fails on the implementation
-symbols, not on the init function.
-
-REPRODUCIBILITY -- read both halves:
-
-  * NOT reproducible from source. The build script that performed the separate-archive
-    split no longer exists. Only the Configure flag list survives (section 2). Nobody,
-    including the author, can currently regenerate this archive from OpenSSL sources
-    and be confident of getting the same split.
-
-  * IS re-archivable from its members. The archive contains exactly 163 object files,
-    and those objects are self-contained: an identical-in-content archive can be
-    rebuilt from them with
-        llvm-ar rcs libproviders.lib <163 .obj files>
-    That is a repack, not a rebuild -- it does not let you regenerate the objects
-    themselves from source.
-
-This is why the archive is vendored rather than merely documented: it is the one
-component here that cannot currently be produced again from source.
+The OpenSSL libraries are self-contained: the default provider is inside libcrypto.lib,
+so no separate provider archive is linked. (The OpenSSL 3.3.2 libraries this fork used
+before needed one, rt-deps/libproviders.lib, which could not be regenerated from source.
+It is no longer used and is no longer in the tree.)
 
 --------------------------------------------------------------------------------
-4. deps-headers/openssl-3.3.2 -- GENERATED HEADERS, NOT STOCK UPSTREAM
+3. bcrypt.dll
 --------------------------------------------------------------------------------
-These headers are the ones GENERATED by the `perl Configure VC-WIN32-ARM no-asm` run
-described in section 2. OpenSSL's configuration step writes build-specific headers
-(configuration.h records OPENSSL_NO_ASM, bn_conf.h the word size, and so on).
+Built with _WIN32_WINNT=0x0603, OpenSSL takes its random numbers from BCryptGenRandom
+(bcrypt.dll) instead of the older CryptGenRandom. The engine already imported bcrypt.dll
+for WinPR, so the set of imported DLLs does not change; Windows RT 8.1 has it (it is part
+of every Windows since Vista), and it is neither an api-ms-win-* umbrella DLL nor
+secur32.dll, so the import gate in port/rt-configure-pins.txt is unaffected. (Verified
+2026-10-21: the same 17 DLLs as the OpenSSL 3.3.2 engine; new symbols BCryptGenRandom,
+WSAIoctl, WSASocketA and PathIsURLA, all long-standing Windows APIs.)
 
-*** Stock upstream OpenSSL 3.3.2 headers are NOT a valid substitute. *** Building
+--------------------------------------------------------------------------------
+4. deps-headers/openssl-3.5.9 -- GENERATED HEADERS, NOT STOCK UPSTREAM
+--------------------------------------------------------------------------------
+These are the public headers of the OpenSSL 3.5.9 release together with the ones
+GENERATED by the configuration run in port/build-openssl-arm32.ps1 (configuration.h
+records OPENSSL_NO_ASM and the other options, bn_conf.h the word size, and so on). The
+script writes the same set into its -Out directory.
+
+*** Stock upstream OpenSSL 3.5.9 headers are NOT a valid substitute. *** Building
 against unconfigured or differently-configured headers while linking these libraries
 produces mismatched assumptions -- the failure mode is silent misbehaviour, not a
 compile error.
 
-deps-headers/zlib-1.3.1 are the ordinary zlib headers matching z.lib.
+deps-headers/zlib-1.3.2 are the ordinary zlib headers matching z.lib.
 
 --------------------------------------------------------------------------------
 5. LICENCES
 --------------------------------------------------------------------------------
-  OpenSSL 3.3.2 (libcrypto, libssl, libproviders, and the generated headers)
-      Apache License 2.0 -- LICENSE.OpenSSL-3.3.2.txt
-  zlib 1.3.1 (z.lib and its headers)
-      zlib licence -- LICENSE.zlib-1.3.1.txt
+  OpenSSL 3.5.9 (libcrypto, libssl, and the generated headers)
+      Apache License 2.0 -- LICENSE.OpenSSL-3.5.9.txt
+  zlib 1.3.2 (z.lib and its headers)
+      zlib licence -- LICENSE.zlib-1.3.2.txt
   port/clang-cl-arm-shim.h
       Copyright 2026 Hamed Ghorbani, Apache License 2.0 (header in the file)
   Everything else in port/
       part of this fork, Apache-2.0 like the rest of the tree.
 
-The Microsoft (MSVC toolset, Windows SDK) and LLVM components the build requires are
-NOT redistributed here. Install them yourself; see README.md for versions and paths.
+The Microsoft (MSVC toolset, Windows SDK), LLVM and Perl components the build requires
+are NOT redistributed here. Install them yourself; see README.md for versions and paths.

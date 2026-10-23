@@ -31,13 +31,30 @@
 extern "C" {
 #endif
 
+/* Each definition stands down when the compiler has the intrinsic built in: the rt2.1 clang
+ * (LLVM 23.1.1-rt2.1) provides all three on ARM32 and rejects a redefinition of a builtin in C++,
+ * as MSVC does. Stock LLVM 18 and rt1/rt2 have none of them and keep these definitions. */
+#if !__has_builtin(_CountLeadingZeros)
 static __forceinline unsigned int _CountLeadingZeros(unsigned long _Val) {
     return _Val ? (unsigned int)__builtin_clz((unsigned int)_Val) : 32u;
 }
+#endif
 
+#if !__has_builtin(_CountLeadingZeros64)
 static __forceinline unsigned int _CountLeadingZeros64(unsigned __int64 _Val) {
     return _Val ? (unsigned int)__builtin_clzll((unsigned long long)_Val) : 64u;
 }
+#endif
+
+/* winnt.h maps InterlockedAdd64 onto _InterlockedAdd64 for 32-bit ARM, without a prototype: MSVC
+ * provides it as an intrinsic, clang declares it only for ARM64. OpenSSL 3.5's crypto/threads_win.c
+ * (CRYPTO_atomic_add64) calls it, so the ARM32 OpenSSL build force-includes this header too.
+ * Returns the NEW value, as the intrinsic does; ARMv7 does the 64-bit add with LDREXD/STREXD. */
+#if !__has_builtin(_InterlockedAdd64)
+static __forceinline __int64 _InterlockedAdd64(__int64 volatile *_Addend, __int64 _Value) {
+    return __atomic_add_fetch(_Addend, _Value, __ATOMIC_SEQ_CST);
+}
+#endif
 
 #ifdef __cplusplus
 }
