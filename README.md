@@ -1,8 +1,8 @@
-# FreeRDP — Finestra's ARM32 / Windows RT fork
+# FreeRDP: Finestra's ARM32 / Windows RT fork
 
 A lightly-patched **FreeRDP 3.32.2** whose **SDL3 client** (`sdl-freerdp.exe`) is the RDP engine embedded
-by [**Finestra**](https://github.com/hamed7ir/Finestra), a themed RDP / SSH / SFTP·FTP·FTPS manager
-whose flagship target is **Windows RT 8.1 on ARM32** (Surface RT / Surface 2) — a platform upstream
+by [**Finestra**](https://github.com/hamed7ir/Finestra), a themed RDP / SSH / SFTP / FTP / FTPS manager
+whose flagship target is **Windows RT 8.1 on ARM32** (Surface RT / Surface 2), a platform upstream
 does not ship binaries for. Finestra 2.0 switched from the Windows client (`wfreerdp.exe`) to the SDL3
 client for its touch support; this branch still carries Finestra's changes to the Windows client too.
 
@@ -15,13 +15,13 @@ client for its touch support; this branch still carries Finestra's changes to th
 | | |
 |---|---|
 | upstream | `https://github.com/FreeRDP/FreeRDP` |
-| fork point | **`97eff6ddfbbfaa8e42a126d362686bd001ff8bdc`** — tag **`3.32.2`** (2026-10-12) |
+| fork point | **`97eff6ddfbbfaa8e42a126d362686bd001ff8bdc`**, tag **`3.32.2`** (2026-10-12) |
 | application | [Finestra](https://github.com/hamed7ir/Finestra) |
 
 `git merge-base HEAD 97eff6d` should return `97eff6d` exactly; if it does not, this README is stale.
 
 This branch is deliberately small. Its diff against `3.32.2` consists of **exactly the six source changes
-below and nothing else** — not even `.gitignore`. Separately, it **adds** one new top-level directory,
+below and nothing else**, not even `.gitignore`. Separately, it **adds** one new top-level directory,
 [`finestra-rt/`](finestra-rt/), containing the ARM32 cross-build material (toolchain, build scripts for
 the ARM32 libraries, generated headers, licences). No upstream file is modified to accommodate it, and
 no prebuilt binary is in the tree.
@@ -75,9 +75,11 @@ and `finestra-rt/` commits:
 | 5 | `f345d2ac4` | Windows client: scale the session pointer to the window's DPI | 1 |
 | 6 | `30e98430d` | CMake: add the missing `WIN81` case to `CMAKE_WINDOWS_VERSION` | 1 |
 
-Check it rather than take it on trust:
+Check it rather than take it on trust. This fork has no tags, so in a fresh clone fetch upstream's
+`3.32.2` tag first:
 
 ```
+git fetch https://github.com/FreeRDP/FreeRDP.git tag 3.32.2 --no-tags
 git diff --name-status 3.32.2 finestra-arm32-rt-3.32 -- . ':(exclude)finestra-rt' ':(exclude)README*.md'
 ```
 
@@ -112,7 +114,7 @@ options below (both architectures):
 
 Pass them to the engine build through `CMAKE_PREFIX_PATH` (the three install prefixes).
 
-### x64 — reproducible from public sources; dependencies **not** vendored
+### x64: reproducible from public sources; dependencies **not** vendored
 
 MSVC (`vcvars64.bat`) + Ninja + static **OpenSSL**, **zlib** and the three SDL3-client libraries above.
 
@@ -132,13 +134,13 @@ On x86 (not shipped by Finestra), MSVC overwrites the public `FindOpenSSL`/`Find
 the libraries must be pinned through the internal ones (`LIB_EAY_RELEASE`, `SSL_EAY_RELEASE`,
 `ZLIB_LIBRARY_RELEASE` and the `_DEBUG` pair).
 
-### ARM32 / Windows RT 8.1 — reproducible from documented sources
+### ARM32 / Windows RT 8.1: reproducible from documented sources
 
 The ARM32 path is a clang-cl cross-compile to `thumbv7-unknown-windows-msvc`. **The toolchain, the
 compatibility shim, the build scripts for the OpenSSL and zlib libraries and their generated headers are
 in this repository**, under [`finestra-rt/`](finestra-rt/). Start from
 [`finestra-rt/port/rt-configure-pins.txt`](finestra-rt/port/rt-configure-pins.txt), which is the exact
-build-the-libraries → configure → build → verify sequence.
+sequence: build the libraries, then configure, build and verify.
 
 **The compiler matters.** The SDL3 client is C++, and stock LLVM 18 miscompiles some ARM32 C++ code
 (virtual-call thunks) and rejects `__try`, which SDL uses. The shipped ARM32 engine and **every** library
@@ -154,17 +156,17 @@ file's defaults.
 | Component | What it is |
 |---|---|
 | `finestra-rt/port/thumbv7-rt.cmake` | CMake toolchain: `--target=thumbv7-unknown-windows-msvc`, `/GS-`, `-D_ARM_`, lld-link, the ARM32 `INCLUDE`/`LIB`; for C++ also `/EHsc` and `/UWINPR_DEFINE_ATTR_NODISCARD` (clang rejects the attribute where FreeRDP's headers place it after `__declspec`) |
-| `finestra-rt/port/armenv.ps1` | companion environment script — **must be dot-sourced** in the same shell as both `cmake` and `ninja` |
+| `finestra-rt/port/armenv.ps1` | companion environment script; it **must be dot-sourced** in the same shell as both `cmake` and `ninja` |
 | `finestra-rt/port/clang-cl-arm-shim.h` | force-include supplying MSVC ARM32 intrinsics older clangs do not declare: `_CountLeadingZeros(64)` (MSVC's STL `<bit>`) and `_InterlockedAdd64` (OpenSSL 3.5's `threads_win.c`). Each stands down where the compiler has it built in (rt2.1 has all three). Apache-2.0. |
 | `finestra-rt/port/build-openssl-arm32.ps1` | builds `libcrypto.lib` + `libssl.lib` (OpenSSL 3.5.9, ARMNT, static) from the official source release |
 | `finestra-rt/port/build-zlib-arm32.ps1` | builds `z.lib` (zlib 1.3.2, ARMNT, static) from the official source release |
-| `finestra-rt/deps-headers/openssl-3.5.9/`, `zlib-1.3.2/` | the headers matching those libraries, including OpenSSL's **generated** ones. Stock upstream OpenSSL headers are **not** a safe substitute — they must match the configuration the libraries were built with. |
+| `finestra-rt/deps-headers/openssl-3.5.9/`, `zlib-1.3.2/` | the headers matching those libraries, including OpenSSL's **generated** ones. Stock upstream OpenSSL headers are **not** a safe substitute: they must match the configuration the libraries were built with. |
 
-**What you build yourself — six ARM32 static libraries, not redistributed here:**
+**What you build yourself: six ARM32 static libraries, not redistributed here:**
 
 | Library | Version | Produced by |
 |---|---|---|
-| `libcrypto.lib` | OpenSSL 3.5.9, ARMNT, static `/MT` | `build-openssl-arm32.ps1` — OpenSSL's `VC-WIN32-ARM` target with clang-cl, `no-asm` |
+| `libcrypto.lib` | OpenSSL 3.5.9, ARMNT, static `/MT` | `build-openssl-arm32.ps1`: OpenSSL's `VC-WIN32-ARM` target with clang-cl, `no-asm` |
 | `libssl.lib` | OpenSSL 3.5.9, ARMNT, static `/MT` | same run |
 | `z.lib` | zlib 1.3.2, ARMNT, static `/MT` | `build-zlib-arm32.ps1` |
 | `SDL3-static.lib` | SDL 3.2.14, ARMNT | CMake, options above; see `rt-configure-pins.txt` STEP 0b |
@@ -181,21 +183,21 @@ standard locations and every path is overridable by an environment variable of t
 
 | Prerequisite | Version | Variable | Default |
 |---|---|---|---|
-| CMake | **3.20+** (verified with 4.4) | — | on `PATH` |
+| CMake | **3.13+** (FreeRDP's own minimum; built with 4.4.0-rc1) | none | on `PATH` |
 | LLVM (clang-cl, lld-link, llvm-lib, llvm-rc, llvm-readobj) | **rt2.1** (23.1.1-rt2.1) for the SDL3 client; 18.1.8 suffices for the Windows client | `LLVM_ROOT` | `C:\Program Files\LLVM` |
 | MSVC toolset headers | **14.44.35207** | `MSVC_STL_INCLUDE_DIR` | `…\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include` |
 | MSVC ARM32 libraries | **14.44.35207** `lib\arm` for the SDL3 client; 14.16.27023 is the Windows client's verified default | `MSVC_ARM32_LIB_DIR` | `…\Microsoft Visual Studio\2017\BuildTools\VC\Tools\MSVC\14.16.27023\lib\arm` |
-| Windows SDK | **10.0.19041.0** (the last with ARM32 import libraries) | `WINSDK_ROOT`, `WINSDK_VER` | `C:\Program Files (x86)\Windows Kits\10` |
+| Windows SDK | **10.0.19041.0** (the version the shipped engine was built with) | `WINSDK_ROOT`, `WINSDK_VER` | `C:\Program Files (x86)\Windows Kits\10` |
 | Ninja | any recent | `NINJA_DIR` | the copy shipped with VS Build Tools |
-| Perl (native Windows, e.g. Strawberry) — OpenSSL script only | 5.x | `PERL_DIR` | on `PATH` |
-| MSVC host `nmake.exe` — OpenSSL script only | from the 14.44 toolset | `NMAKE_DIR` | on `PATH` |
+| Perl (native Windows, e.g. Strawberry), OpenSSL script only | 5.x | `PERL_DIR` | on `PATH` |
+| MSVC host `nmake.exe`, OpenSSL script only | from the 14.44 toolset | `NMAKE_DIR` | on `PATH` |
 
 The MSVC and Windows SDK components reach the compiler through `%INCLUDE%` / `%LIB%`, which
-`armenv.ps1` sets — they are not named in the generated build files, so a missing one surfaces as a
+`armenv.ps1` sets. They are not named in the generated build files, so a missing one surfaces as a
 compiler error rather than a CMake error. That is why `armenv.ps1` existence-checks every one of them
 and warns per path before you start.
 
-**Import gate — mandatory for any ARM32 binary.** Run
+**Import gate, mandatory for any ARM32 binary.** Run
 `llvm-readobj --file-headers --coff-imports sdl-freerdp.exe` and require all three: machine type
 `IMAGE_FILE_MACHINE_ARMNT (0x1C4)`; **zero** `api-ms-win-*` imports; **no** `secur32.dll`. Windows RT
 8.1 lacks the API-set umbrella DLLs and native SSPI, and a violation makes the binary fail to load
@@ -228,7 +230,7 @@ libfreerdp/locale/keyboard.c
 
 No other upstream file is modified. The `finestra-rt/` directory is **added**, not modified: it
 contains this project's own build material plus redistributed third-party headers, each with its
-own licence and modification notice — see [`finestra-rt/NOTICE.txt`](finestra-rt/NOTICE.txt),
+own licence and modification notice: see [`finestra-rt/NOTICE.txt`](finestra-rt/NOTICE.txt),
 [`LICENSE.OpenSSL-3.5.9.txt`](finestra-rt/LICENSE.OpenSSL-3.5.9.txt) and
 [`LICENSE.zlib-1.3.2.txt`](finestra-rt/LICENSE.zlib-1.3.2.txt).
 
@@ -236,4 +238,4 @@ Upstream's original README is preserved verbatim as [`README-UPSTREAM.md`](READM
 
 ## Licence
 
-Apache License 2.0 — see [`LICENSE`](LICENSE), unchanged from upstream.
+Apache License 2.0, see [`LICENSE`](LICENSE), unchanged from upstream.
