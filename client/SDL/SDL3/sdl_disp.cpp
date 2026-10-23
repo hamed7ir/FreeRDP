@@ -28,6 +28,7 @@
 #include "sdl_disp.hpp"
 #include "sdl_input.hpp"
 #include "sdl_context.hpp"
+#include "sdl_finestra.hpp"
 
 #include <freerdp/log.h>
 #define TAG CLIENT_TAG("sdl.disp")
@@ -444,6 +445,16 @@ UINT sdlDispContext::DisplayControlCaps(UINT32 maxNumMonitors, UINT32 maxMonitor
 		/* Window events have long passed by the time the channel comes up, and a fullscreen
 		 * window produces no further ones, so send the layout now. */
 		std::ignore = addTimer();
+		return CHANNEL_RC_OK;
+	}
+
+	if (finestra::embedded(settings))
+	{
+		/* Embedded, the host sized the window before the channel came up, and may never resize it
+		 * again (a fullscreen host does not), so send the layout for the window's real size now. */
+		auto window = _sdl->getFirstWindow();
+		if (window)
+			std::ignore = updateMonitor(window->id());
 		return CHANNEL_RC_OK;
 	}
 

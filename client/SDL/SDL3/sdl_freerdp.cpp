@@ -71,6 +71,7 @@
 #include "sdl_channels.hpp"
 #include "sdl_freerdp.hpp"
 #include "sdl_context.hpp"
+#include "sdl_finestra.hpp"
 #include "sdl_monitor.hpp"
 #include "sdl_pointer.hpp"
 #include "sdl_prefs.hpp"
@@ -682,6 +683,7 @@ int main(int argc, char* argv[])
 	if (!SDL_SetHint(SDL_HINT_MOUSE_DPI_SCALE_CURSORS, "1"))
 		return -1;
 #endif
+	finestra::prepareProcess(settings);
 
 	/* Basic SDL initialization */
 	if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
@@ -726,5 +728,5 @@ int main(int argc, char* argv[])
 	if (sdl->exitCode() != 0)
 		rc = sdl->exitCode();
 
-	return rc;
+	return finestra::exitCode(context, rc);
 }

@@ -23,6 +23,7 @@
 
 #include "sdl_window.hpp"
 #include "sdl_utils.hpp"
+#include "sdl_finestra.hpp"
 
 #include <freerdp/utils/string.h>
 
@@ -60,7 +61,9 @@ SdlWindow::SdlWindow(SDL_DisplayID id, const std::string& title, const SDL_Rect&
 	if (flags & SDL_WINDOW_HIDDEN)
 		SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
 
+	finestra::createProperties(props);
 	_window = SDL_CreateWindowWithProperties(props);
+	finestra::windowCreated(_window);
 	SDL_DestroyProperties(props);
 	SDL_SetHint(SDL_HINT_APP_NAME, "");
 	std::ignore = SDL_SyncWindow(_window);
@@ -204,6 +207,8 @@ bool SdlWindow::grabMouse(bool enable)
 
 void SdlWindow::setBordered(bool bordered)
 {
+	if (finestra::isEmbedded(_window))
+		return; /* the host owns an embedded window's frame and geometry */
 	if (_window)
 		SDL_SetWindowBordered(_window, bordered);
 	std::ignore = SDL_SyncWindow(_window);
@@ -211,18 +216,24 @@ void SdlWindow::setBordered(bool bordered)
 
 void SdlWindow::raise()
 {
+	if (finestra::isEmbedded(_window))
+		return;
 	SDL_RaiseWindow(_window);
 	std::ignore = SDL_SyncWindow(_window);
 }
 
 void SdlWindow::resizeable(bool use)
 {
+	if (finestra::isEmbedded(_window))
+		return;
 	SDL_SetWindowResizable(_window, use);
 	std::ignore = SDL_SyncWindow(_window);
 }
 
 void SdlWindow::fullscreen(bool enter, bool forceOriginalDisplay)
 {
+	if (finestra::isEmbedded(_window))
+		return;
 	if (enter && forceOriginalDisplay && _displayID != 0)
 	{
 		/* Move the window to the desired display. We should not wait
@@ -239,6 +250,8 @@ void SdlWindow::fullscreen(bool enter, bool forceOriginalDisplay)
 
 void SdlWindow::minimize()
 {
+	if (finestra::isEmbedded(_window))
+		return;
 	SDL_MinimizeWindow(_window);
 	std::ignore = SDL_SyncWindow(_window);
 }
@@ -270,6 +283,8 @@ bool SdlWindow::resizeToScale()
 
 bool SdlWindow::resize(const SDL_Point& size)
 {
+	if (finestra::isEmbedded(_window))
+		return true; /* the host sizes an embedded window */
 	return SDL_SetWindowSize(_window, size.x, size.y);
 }
 
@@ -792,6 +807,10 @@ static SDL_Window* createDummy(SDL_DisplayID id)
 
 rdpMonitor SdlWindow::query(SDL_DisplayID id, bool forceAsPrimary)
 {
+	rdpMonitor embedded{};
+	if (finestra::queryDisplay(id, forceAsPrimary, embedded))
+		return embedded; /* no probe window flashed over the host */
+
 	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), SDL_DestroyWindow);
 	if (!window)
 		return {};

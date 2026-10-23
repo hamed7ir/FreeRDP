@@ -31,6 +31,8 @@ set(SRCS
     sdl_input.hpp
     sdl_touch.cpp
     sdl_touch.hpp
+    sdl_finestra.cpp
+    sdl_finestra.hpp
     sdl_pointer.cpp
     sdl_pointer.hpp
     sdl_disp.cpp

@@ -26,6 +26,7 @@
 #include "sdl_monitor.hpp"
 #include "sdl_pointer.hpp"
 #include "sdl_touch.hpp"
+#include "sdl_finestra.hpp"
 
 #include <sdl_common_utils.hpp>
 #include <scoped_guard.hpp>
@@ -147,6 +148,8 @@ BOOL SdlContext::preConnect(freerdp* instance)
 
 	if (!freerdp_settings_set_bool(settings, FreeRDP_CertificateCallbackPreferPEM, TRUE))
 		return FALSE;
+
+	finestra::preConnect(instance->context);
 
 	/* Optional OS identifier sent to server */
 	if (!freerdp_settings_set_uint32(settings, FreeRDP_OsMajorType, OSMAJORTYPE_UNIX))
@@ -299,6 +302,7 @@ BOOL SdlContext::postConnect(freerdp* instance)
 	                            freerdp_settings_get_bool(context->settings, FreeRDP_UseMultimon),
 	                        true))
 		return FALSE;
+	finestra::postConnect(context);
 	sdl->setConnected(true);
 	return TRUE;
 }
@@ -363,6 +367,8 @@ bool SdlContext::createWindows()
 	const auto& title = windowTitle();
 
 	ScopeGuard guard1([&]() { _windowsCreatedEvent.set(); });
+
+	finestra::prepareWindows(settings);
 
 	UINT32 windowCount = freerdp_settings_get_uint32(settings, FreeRDP_MonitorCount);
 
@@ -1330,6 +1336,8 @@ bool SdlContext::handleEvent(const SDL_MouseButtonEvent& ev)
 
 bool SdlContext::handleEvent(const SDL_TouchFingerEvent& ev)
 {
+	if (!finestra::touchMode())
+		return true; /* mouse mode: SDL delivers the same contact as mouse input instead */
 	if (!getWindowForId(ev.windowID))
 		return true;
 	SDL_Event copy{};
@@ -1488,6 +1496,8 @@ SDL_FRect SdlContext::pixelToScreen(SDL_WindowID id, const SDL_FRect& pos, bool 
 
 bool SdlContext::handleEvent(const SDL_Event& ev)
 {
+	if (finestra::handleEvent(context(), ev))
+		return true;
 	if ((ev.type >= SDL_EVENT_DISPLAY_FIRST) && (ev.type <= SDL_EVENT_DISPLAY_LAST))
 	{
 		const auto& dev = ev.display;
@@ -1636,6 +1646,10 @@ bool SdlContext::useLocalScale() const
 	const auto ssize = freerdp_settings_get_bool(context()->settings, FreeRDP_SmartSizing);
 	if (ssize)
 		return true;
+	/* Embedded, the host sizes the window, not the session: without /smart-sizing the session is
+	 * drawn 1:1 from the top-left (letterbox), as the Windows client draws it, never stretched. */
+	if (finestra::embedded(context()->settings))
+		return false;
 	const auto dynResize =
 	    freerdp_settings_get_bool(context()->settings, FreeRDP_DynamicResolutionUpdate);
 	const auto fs = freerdp_settings_get_bool(context()->settings, FreeRDP_Fullscreen);
@@ -1664,10 +1678,24 @@ bool SdlContext::drawToWindows(const std::vector<SDL_Rect>& rects)
 	bool firstShow = false;
 	for (auto& window : _windows)
 	{
-		if (SDL_GetWindowFlags(window.second.window()) & SDL_WINDOW_HIDDEN)
+		auto w = window.second.window();
+		const bool hidden = (SDL_GetWindowFlags(w) & SDL_WINDOW_HIDDEN) != 0;
+		if (finestra::isEmbedded(w))
 		{
-			SDL_ShowWindow(window.second.window());
-			SDL_RaiseWindow(window.second.window());
+			/* Shown once, with a full first frame however it became visible; after that the
+			 * host owns its visibility, so a background tab the host hid stays hidden. */
+			if (finestra::takeFirstDraw())
+			{
+				if (hidden)
+					SDL_ShowWindow(w);
+				firstShow = true;
+			}
+			continue;
+		}
+		if (hidden)
+		{
+			SDL_ShowWindow(w);
+			SDL_RaiseWindow(w);
 			firstShow = true;
 		}
 	}
@@ -1748,6 +1776,10 @@ bool SdlContext::redraw(bool suppress) const
 
 	/* In RAIL mode, hiding the desktop window must not suppress server output. */
 	if (suppress && _rail.enabled())
+		return true;
+
+	/* The host paused this session: showing or exposing its window must not resume it. */
+	if (!suppress && finestra::outputPaused())
 		return true;
 
 	auto gdi = context()->gdi;
