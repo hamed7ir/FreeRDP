@@ -66,7 +66,17 @@ namespace
 	 * Clipboard.SetText does, retrying every 100 ms without answering messages). Reading in
 	 * between would hold the clipboard open waiting on that app while it waits on us. */
 	constexpr ULONGLONG kLocalSettleMs = 400;
-	constexpr ULONG kReadBlock = 1024 * 1024;           /* bytes asked of the server per request */
+	/* Bytes asked of the server per file request. Every request is a round trip, so with a far
+	 * server bigger blocks are much faster (measured with 400 ms of ping: 2.3 MB/s at 1 MB, 8.3 MB/s
+	 * at 4 MB), but a block must still arrive well inside kContentsTimeoutMs on a slow line. So the
+	 * size adapts, shared by every stream: it starts at kReadBlock, doubles while full blocks arrive
+	 * within kFastBlockMs, halves when one takes longer than kSlowBlockMs, and stays at kReadBlock
+	 * for good once a server refuses a bigger request. */
+	constexpr ULONG kReadBlock = 1024 * 1024;
+	constexpr ULONG kMinReadBlock = 256 * 1024;
+	constexpr ULONG kMaxReadBlock = 4 * 1024 * 1024;
+	constexpr ULONGLONG kFastBlockMs = 1500;
+	constexpr ULONGLONG kSlowBlockMs = 8000;
 	constexpr UINT32 kMaxServeBlock = 8 * 1024 * 1024;  /* most read from disk for one server request */
 	constexpr size_t kMaxFiles = 100000;
 	constexpr int kMaxDepth = 64;
@@ -650,6 +660,36 @@ class WinClip
 	[[nodiscard]] bool fetchFileContents(UINT32 gen, UINT32 index, UINT32 flags, UINT64 position,
 	                                     UINT32 cb, std::vector<BYTE>& out);
 
+	/* clipboard thread: the adaptive request size of file reads (see kReadBlock) */
+	[[nodiscard]] ULONG readBlock() const
+	{
+		return _readBlock;
+	}
+	[[nodiscard]] ULONG readCeiling() const
+	{
+		return _readCeiling;
+	}
+	void blockArrived(ULONG size, ULONGLONG ms)
+	{
+		if ((size >= _readBlock) && (ms < kFastBlockMs) && (_readBlock < _readCeiling))
+			_readBlock = std::min<ULONG>(_readBlock * 2, _readCeiling);
+		else if ((ms > kSlowBlockMs) && (_readBlock > kMinReadBlock))
+			_readBlock = std::max<ULONG>(_readBlock / 2, kMinReadBlock);
+	}
+	void blockRefused()
+	{
+		_readCeiling = kReadBlock;
+		_readBlock = std::min<ULONG>(_readBlock, kReadBlock);
+	}
+	/* the module is stopping or the connection is being aborted */
+	[[nodiscard]] bool stopping() const
+	{
+		if (WaitForSingleObject(_stopEvent, 0) == WAIT_OBJECT_0)
+			return true;
+		HANDLE abort = freerdp_abort_event(_rdp);
+		return abort && (WaitForSingleObject(abort, 0) == WAIT_OBJECT_0);
+	}
+
 	/* channel callbacks */
 	[[nodiscard]] UINT onMonitorReady();
 	[[nodiscard]] UINT onServerCapabilities(const CLIPRDR_CAPABILITIES* caps);
@@ -734,6 +774,10 @@ class WinClip
 	std::atomic<UINT32> _nextStreamId = 0;
 	UINT32 _contentsAwaited = 0;
 	UINT32 _contentsRequested = 0; /* bytes asked for: a longer answer is cut to this */
+
+	/* file read request size (clipboard thread only: every stream runs on it) */
+	ULONG _readBlock = kReadBlock;
+	ULONG _readCeiling = kMaxReadBlock;
 	bool _contentsOk = false;
 	std::vector<BYTE> _contentsData;
 
@@ -766,13 +810,31 @@ HRESULT ServerFileStream::read(void* pv, ULONG cb, ULONG* pcbRead)
 			continue;
 		}
 
-		/* Ask for a block at least kReadBlock long: Explorer reads in small pieces, and every
+		/* Ask for a whole block (see kReadBlock): Explorer reads in small pieces, and every
 		 * request is a round trip to the server. */
 		const UINT64 remaining = _size - _pos;
-		const UINT64 wanted = std::max<UINT64>(cb - total, kReadBlock);
-		const UINT32 request = static_cast<UINT32>(std::min<UINT64>(wanted, remaining));
+		const UINT64 wanted =
+		    std::min<UINT64>(std::max<UINT64>(cb - total, _clip->readBlock()), _clip->readCeiling());
+		UINT32 request = static_cast<UINT32>(std::min<UINT64>(wanted, remaining));
 		std::vector<BYTE> data;
-		if (!_clip->fetchFileContents(_gen, _index, FILECONTENTS_RANGE, _pos, request, data))
+		ULONGLONG started = GetTickCount64();
+		bool ok = _clip->fetchFileContents(_gen, _index, FILECONTENTS_RANGE, _pos, request, data);
+		if (!ok && (request > kReadBlock) && (GetTickCount64() - started < kSlowBlockMs) &&
+		    (_clip->generation() == _gen) && !_clip->stopping())
+		{
+			/* A big request that failed at once may be a server that refuses big requests: try the
+			 * default size once, and keep to it only if that works. A slow failure (timeout), a
+			 * newer server clipboard or a stop is not about the size. */
+			const UINT32 smaller = static_cast<UINT32>(std::min<UINT64>(kReadBlock, remaining));
+			started = GetTickCount64();
+			ok = _clip->fetchFileContents(_gen, _index, FILECONTENTS_RANGE, _pos, smaller, data);
+			if (ok)
+			{
+				_clip->blockRefused();
+				request = smaller;
+			}
+		}
+		if (!ok)
 		{
 			if (total > 0)
 				break;
@@ -780,6 +842,7 @@ HRESULT ServerFileStream::read(void* pv, ULONG cb, ULONG* pcbRead)
 				*pcbRead = 0;
 			return E_FAIL;
 		}
+		_clip->blockArrived(request, GetTickCount64() - started);
 		if (data.empty())
 			break; /* the server has no more: report what was read */
 		if (data.size() > request)
