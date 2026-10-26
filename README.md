@@ -20,7 +20,7 @@ client for its touch support; this branch still carries Finestra's changes to th
 
 `git merge-base HEAD 97eff6d` should return `97eff6d` exactly; if it does not, this README is stale.
 
-This branch is deliberately small. Its diff against `3.32.2` consists of **exactly the six source changes
+This branch is deliberately small. Its diff against `3.32.2` consists of **exactly the seven source changes
 below and nothing else**, not even `.gitignore`. Separately, it **adds** one new top-level directory,
 [`finestra-rt/`](finestra-rt/), containing the ARM32 cross-build material (toolchain, build scripts for
 the ARM32 libraries, generated headers, licences). No upstream file is modified to accommodate it, and
@@ -40,27 +40,38 @@ no prebuilt binary is in the tree.
    Direct3D 11 at feature level 9_1 draws a black screen on Windows RT (an `SDL_RENDER_DRIVER` setting
    still takes precedence). New files `sdl_finestra.cpp` and `sdl_finestra.hpp`; small hooks in
    `sdl_context`, `sdl_window`, `sdl_disp` and `sdl_freerdp`.
+2. **`client/SDL`: the Windows clipboard, with file copy.** On Windows the clipboard channel is served
+   by a module of its own instead of SDL's clipboard, which only handles text and images and notices a
+   local copy only while one of its windows is the foreground window (so an embedded session never sent
+   the device's clipboard to the server). Text, images and other plain formats go both ways, and so do
+   copied files: files copied on the server can be pasted into a folder in Explorer, which downloads
+   them, and files copied on the device can be pasted on the server. It follows the design of FreeRDP's
+   Windows client (`client/Windows/wf_cliprdr.c`), and treats the server as untrusted: it serves only
+   what it announced, never maps a server format name onto a standard format, caps the new format names
+   a server can register, and accepts only plain relative file names. `/clipboard:files-to:` and
+   `/clipboard:direction-to:` apply as in every FreeRDP client. New files `sdl_wincliprdr.cpp` and
+   `sdl_wincliprdr.hpp`; the channel hook in `sdl_channels.cpp`.
 
 **In code shared by every client** (both are upstream bugs, offered upstream):
 
-2. **`client/common`: fill in the active contact count in `freerdp_client_touch_update`.** The
+3. **`client/common`: fill in the active contact count in `freerdp_client_touch_update`.** The
    touch-to-mouse emulation picks the mouse button from the contact count, which nothing ever set.
-3. **`locale`: use `UINT32` for the keyboard remapping key and value.** One caller of
+4. **`locale`: use `UINT32` for the keyboard remapping key and value.** One caller of
    `freerdp_extract_key_value` passed `DWORD` pointers where the function takes `UINT32` (its other caller
    already uses `UINT32`); recent clang rejects that. Same values, matching types.
 
 **In the Windows client** (`wfreerdp`, which Finestra 1.x shipped):
 
-4. **`client/windows`: a local stats/control pipe** like the one above (live RTT and bandwidth from
+5. **`client/windows`: a local stats/control pipe** like the one above (live RTT and bandwidth from
    FreeRDP's network autodetect, and PAUSE/RESUME). The commit's message also mentions `/parent-window`
    embedding fixes; as applied to 3.32.2 the change contains only the pipe.
-5. **`client/windows`: scale the session pointer to the window's DPI.** `GetDpiForWindow` is resolved
+6. **`client/windows`: scale the session pointer to the window's DPI.** `GetDpiForWindow` is resolved
    dynamically via `GetProcAddress` so it never becomes a load-time import (Windows RT 8.1's loader lacks
    that Windows-10-only export), falling back to `GetDeviceCaps(LOGPIXELSX)`.
 
 **In the build:**
 
-6. **`cmake`: the missing `WIN81` case for `CMAKE_WINDOWS_VERSION`.** Upstream accepts WIN7, WIN8 and
+7. **`cmake`: the missing `WIN81` case for `CMAKE_WINDOWS_VERSION`.** Upstream accepts WIN7, WIN8 and
    WIN10 but not 8.1, so targeting the 8.1 API floor meant overshooting or setting the macros by hand.
 
 Each is one commit; `git log --oneline 3.32.2..finestra-arm32-rt-3.32` lists them with the documentation
@@ -69,11 +80,12 @@ and `finestra-rt/` commits:
 | # | commit | change | files |
 |---|---|---|---|
 | 1 | `37e03d1f0` | SDL3 client: run inside Finestra (embedding, touch and mouse modes, stats pipe) | 7 |
-| 2 | `57fd8b939` | shared client code: fill in the active contact count in `freerdp_client_touch_update` | 1 |
-| 3 | `7b2147e75` | libfreerdp: use `UINT32` for the keyboard remapping key and value | 1 |
-| 4 | `bc8568940` | Windows client: a local stats/control pipe | 3 |
-| 5 | `f345d2ac4` | Windows client: scale the session pointer to the window's DPI | 1 |
-| 6 | `30e98430d` | CMake: add the missing `WIN81` case to `CMAKE_WINDOWS_VERSION` | 1 |
+| 2 | `6820be1e3` | SDL3 client: the Windows clipboard, with file copy | 4 |
+| 3 | `57fd8b939` | shared client code: fill in the active contact count in `freerdp_client_touch_update` | 1 |
+| 4 | `7b2147e75` | libfreerdp: use `UINT32` for the keyboard remapping key and value | 1 |
+| 5 | `bc8568940` | Windows client: a local stats/control pipe | 3 |
+| 6 | `f345d2ac4` | Windows client: scale the session pointer to the window's DPI | 1 |
+| 7 | `30e98430d` | CMake: add the missing `WIN81` case to `CMAKE_WINDOWS_VERSION` | 1 |
 
 Check it rather than take it on trust. This fork has no tags, so in a fresh clone fetch upstream's
 `3.32.2` tag first:
@@ -83,7 +95,7 @@ git fetch https://github.com/FreeRDP/FreeRDP.git tag 3.32.2 --no-tags
 git diff --name-status 3.32.2 finestra-arm32-rt-3.32 -- . ':(exclude)finestra-rt' ':(exclude)README*.md'
 ```
 
-That lists **exactly 14 files and nothing else**: 12 modified and the 2 added SDL files. Every other
+That lists **exactly 17 files and nothing else**: 13 modified and the 4 added SDL files. Every other
 commit in `git log --oneline 3.32.2..finestra-arm32-rt-3.32` touches only `README*.md` and
 `finestra-rt/`, which is what the `--name-status` command above demonstrates.
 
@@ -214,11 +226,14 @@ changed files are exactly:
 ```
 CMakeLists.txt
 client/SDL/SDL3/CMakeLists.txt
+client/SDL/SDL3/sdl_channels.cpp
 client/SDL/SDL3/sdl_context.cpp
 client/SDL/SDL3/sdl_disp.cpp
 client/SDL/SDL3/sdl_finestra.cpp      (added)
 client/SDL/SDL3/sdl_finestra.hpp      (added)
 client/SDL/SDL3/sdl_freerdp.cpp
+client/SDL/SDL3/sdl_wincliprdr.cpp    (added)
+client/SDL/SDL3/sdl_wincliprdr.hpp    (added)
 client/SDL/SDL3/sdl_window.cpp
 client/Windows/wf_client.c
 client/Windows/wf_event.c
