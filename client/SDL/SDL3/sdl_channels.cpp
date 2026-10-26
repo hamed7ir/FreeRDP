@@ -31,6 +31,9 @@
 #include "sdl_channels.hpp"
 #include "sdl_context.hpp"
 #include "sdl_disp.hpp"
+#if defined(_WIN32)
+#include "sdl_wincliprdr.hpp"
+#endif
 
 void sdl_OnChannelConnectedEventHandler(void* context, const ChannelConnectedEventArgs* e)
 {
@@ -52,7 +55,12 @@ void sdl_OnChannelConnectedEventHandler(void* context, const ChannelConnectedEve
 		auto clip = reinterpret_cast<CliprdrClientContext*>(e->pInterface);
 		WINPR_ASSERT(clip);
 
+#if defined(_WIN32)
+		/* Windows: the clipboard module of its own, with file copy (sdl_wincliprdr.hpp) */
+		if (!sdl_wincliprdr_init(static_cast<rdpContext*>(context), clip))
+#else
 		if (!sdl->getClipboardChannelContext().init(clip))
+#endif
 			WLog_Print(sdl->getWLog(), WLOG_WARN, "Failed to initialize clipboard channel");
 	}
 	else if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0)
@@ -97,7 +105,11 @@ void sdl_OnChannelDisconnectedEventHandler(void* context, const ChannelDisconnec
 		auto clip = reinterpret_cast<CliprdrClientContext*>(e->pInterface);
 		WINPR_ASSERT(clip);
 
+#if defined(_WIN32)
+		if (!sdl_wincliprdr_uninit(clip))
+#else
 		if (!sdl->getClipboardChannelContext().uninit(clip))
+#endif
 			WLog_Print(sdl->getWLog(), WLOG_WARN, "Failed to uninitialize clipboard channel");
 		clip->custom = nullptr;
 	}

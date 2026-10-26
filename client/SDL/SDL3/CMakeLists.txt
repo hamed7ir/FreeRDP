@@ -61,6 +61,12 @@ set(SRCS
     sdl_x11.cpp
 )
 
+# Windows: the clipboard is served by a module of its own, with file copy (sdl_wincliprdr.hpp);
+# sdl_clip serves every other platform.
+if(WIN32)
+  list(APPEND SRCS sdl_wincliprdr.cpp sdl_wincliprdr.hpp)
+endif()
+
 # Native X11 helpers for RAIL (_NET_WM_MOVERESIZE, compositor detection); no-op stubs without libX11.
 set(SDL_X11_NATIVE OFF)
 if(NOT WIN32 AND NOT APPLE)
@@ -131,6 +137,10 @@ list(
   sdl3-dialogs
   sdl-common-prefs
 )
+
+if(WIN32)
+  list(APPEND LIBS ole32 shell32 user32)
+endif()
 
 if(NOT WITH_SDL_LINK_SHARED)
   list(APPEND LIBS SDL3::SDL3-static)
