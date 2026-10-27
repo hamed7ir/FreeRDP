@@ -54,18 +54,21 @@ no prebuilt binary is in the tree.
    `sdl_wincliprdr.cpp` and `sdl_wincliprdr.hpp`; the channel hook in `sdl_channels.cpp`. Two commits:
    the module, and the adaptive read size.
 
-**In code shared by every client** (upstream bugs; the first two are offered upstream):
+**In code shared by every client** (upstream bugs):
 
 3. **`client/common`: fill in the active contact count in `freerdp_client_touch_update`.** The
    touch-to-mouse emulation picks the mouse button from the contact count, which nothing ever set.
+   Offered upstream as [FreeRDP#13870](https://github.com/FreeRDP/FreeRDP/pull/13870).
 4. **`locale`: use `UINT32` for the keyboard remapping key and value.** One caller of
    `freerdp_extract_key_value` passed `DWORD` pointers where the function takes `UINT32` (its other caller
-   already uses `UINT32`); recent clang rejects that. Same values, matching types.
+   already uses `UINT32`); recent clang rejects that. Same values, matching types. Upstream master has
+   since made the same change.
 5. **`channels/client`: reassemble a chunked channel message in linear time.** A static virtual channel
    message arrives in chunks of about 1.6 KB, and the reassembly grew its buffer by one chunk at a time.
    WinPR 3's `Stream_EnsureCapacity` grows to exactly the size asked for, so every chunk could copy the
    whole message again. The buffer now grows geometrically, capped at the announced total and never
-   beyond twice what has arrived. A 4 MB clipboard file block went from 9.8 MB/s to 47 MB/s.
+   beyond twice what has arrived. A 4 MB clipboard file block went from 9.8 MB/s to 47 MB/s. Offered
+   upstream as [FreeRDP#13869](https://github.com/FreeRDP/FreeRDP/pull/13869).
 
 **In the Windows client** (`wfreerdp`, which Finestra 1.x shipped):
 
